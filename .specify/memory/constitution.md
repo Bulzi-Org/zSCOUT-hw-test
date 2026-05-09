@@ -93,7 +93,7 @@ The project produces a single Docker image (`zscout-hw-test`) that runs the test
 - All development follows the Spec Kit (SDD) methodology: constitution → specify → plan → tasks → implement
 - Each SpecKit phase is committed and pushed independently for traceability
 - Feature branches follow the pattern `NNN-feature-name` (e.g., `001-hw-comm-test`)
-- Every commit includes `Co-Authored-By: Oz <oz-agent@warp.dev>` when AI-assisted
+- AI-assisted commits do not require special attribution lines
 - Tests are validated on real hardware before merging to main
 
 ## Governance
