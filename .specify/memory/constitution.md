@@ -1,50 +1,57 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+# zSCOUT-hw-test Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Hardware-First Validation
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+Every test MUST interact with real hardware or clearly declare itself a mock/stub. Tests are only authoritative when run on a live CM5 + CM5-IO-BASE-B system. Simulated results must be clearly labeled and never treated as pass/fail evidence for hardware readiness.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### II. Docker Parity (NON-NEGOTIABLE)
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+The primary purpose of this project is to prove that Docker containers can communicate with hardware peripherals. Every hardware test MUST have two execution modes:
+- **Host mode**: runs natively on the CM5 to establish a baseline
+- **Container mode**: runs inside a Docker container with the same device mappings used by the production `docker-compose.yml` in `zSCOUT-image-CM5`
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+If a test passes on the host but fails in the container, that is a critical finding — not a test infrastructure problem.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+### III. Actionable Diagnostics
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+Test failures MUST produce actionable output: the specific device path, kernel module, or driver that is missing or misconfigured. A bare "FAIL" is never acceptable. Every failure message must guide the operator toward resolution — e.g., "morse_driver not loaded: run `modprobe morse`" or "/dev/ttyUSB0 not found: check FT232 USB connection."
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+### IV. Structured Output
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+All test results MUST be available in both human-readable (terminal) and machine-readable (JSON) formats. JSON output enables automated CI gating and cross-run comparison. Human output enables quick field diagnosis over SSH.
+
+### V. Isolation and Independence
+
+Each hardware test module (GPS, uSDR, MM8108, compass) MUST be independently runnable. A failure in one module must not prevent the others from executing. Test orchestration runs all modules and aggregates results, but each module stands alone.
+
+### VI. Minimal Dependencies
+
+Tests run on resource-constrained ARM64 hardware. Dependencies must be minimal and justified. Prefer standard library and tools already present in the zSCOUT base image (Python 3, gpsd-clients, SoapySDR, i2c-tools). Do not introduce heavy test frameworks.
+
+## Hardware Constraints
+
+- **Target platform**: Raspberry Pi CM5 Lite (BCM2712, ARM64, no eMMC) on Waveshare CM5-IO-BASE-B carrier board
+- **Boot media**: microSD card, headless Raspberry Pi OS Lite (Bookworm)
+- **Peripherals under test**:
+  - MicoAir MG-A01 GPS via Waveshare FT232 USB-to-TTL → `gpsd`
+  - Wavelet-Lab uSDR (LMS6002D) via M.2 A+E→M-key adapter → LimeSuite / SoapySDR (USB + PCIe)
+  - Morse Micro MM8108 Wi-Fi HaLow → `morse_driver` kernel module
+  - QMC5883L compass → I2C bus 1
+- **Docker runtime**: Docker Engine + Docker Compose, containers use `privileged: true` and `network_mode: host` per production config
+- **Network access**: WiFi + Bluetooth for SSH; no guaranteed internet during testing
+
+## Development Workflow
+
+- All development follows the Spec Kit (SDD) methodology: constitution → specify → plan → tasks → implement
+- Each SpecKit phase is committed and pushed independently for traceability
+- Feature branches follow the pattern `NNN-feature-name` (e.g., `001-hw-comm-test`)
+- Every commit includes `Co-Authored-By: Oz <oz-agent@warp.dev>` when AI-assisted
+- Tests are validated on real hardware before merging to main
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+This constitution supersedes all other development practices in this repository. Amendments require documentation in a commit message explaining the rationale. All PRs must verify compliance with these principles.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2026-05-09 | **Last Amended**: 2026-05-09
