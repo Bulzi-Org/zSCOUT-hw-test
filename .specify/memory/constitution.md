@@ -28,7 +28,7 @@ Each hardware test module (GPS, uSDR, MM8108, compass) MUST be independently run
 
 ### VI. Minimal Dependencies
 
-Tests run on resource-constrained ARM64 hardware. The .NET runtime is the sole managed-code dependency. Native tool invocations (gpsd-clients, SoapySDRUtil, i2c-tools) already present in the zSCOUT base image are called via `System.Diagnostics.Process`. Do not introduce additional heavy frameworks beyond xUnit for testing.
+Tests run on resource-constrained ARM64 hardware. The .NET runtime is the sole managed-code dependency. Native tool invocations (gpsd-clients, SoapySDRUtil, i2c-tools) already present in the zSCOUT base image are called via `System.Diagnostics.Process`. Do not introduce additional heavy frameworks beyond xUnit for testing and Blazor Server for the web dashboard.
 
 ## Technology Stack (NON-NEGOTIABLE)
 
@@ -36,12 +36,29 @@ Tests run on resource-constrained ARM64 hardware. The .NET runtime is the sole m
 - **Runtime**: .NET 10 (LTS) — `mcr.microsoft.com/dotnet/runtime:10.0` and `mcr.microsoft.com/dotnet/sdk:10.0` base images
 - **Target architecture**: `linux-arm64` (Raspberry Pi CM5 / BCM2712)
 - **Test framework**: xUnit (for unit and integration tests within the solution)
+- **Web dashboard**: Blazor Server (ASP.NET Core) with SignalR for real-time updates
 - **Build**: `dotnet publish -r linux-arm64 --self-contained false` (framework-dependent, runtime provided by Docker image)
-- **Container**: Multi-stage Dockerfile — SDK image for build, runtime image for execution
+- **Container**: Multi-stage Dockerfile — SDK image for build, ASP.NET runtime image for execution
+
+## Web Dashboard
+
+The project includes a Blazor Server web dashboard accessible at `http://<cm5-ip>:5000`. The dashboard provides:
+
+1. **Live hardware status** — real-time view of each peripheral's connectivity and health, updated via SignalR
+2. **Test execution control** — start/stop individual test modules or the full suite from the browser
+3. **Test configuration** — adjust test parameters (timeouts, device paths, polling intervals) without redeploying
+4. **Raw data streams** — live views of:
+   - GPS: NMEA sentence stream and parsed position/fix data
+   - uSDR: SoapySDR device info, sample rate, gain settings
+   - MM8108: Wi-Fi HaLow interface status, signal metrics, module state
+   - Compass: heading, raw magnetometer X/Y/Z readings
+5. **Test history** — results from previous runs with pass/fail trends and diagnostic details
+
+The dashboard runs inside the same Docker container as the test suite. It is the primary user interface; CLI mode remains available for headless/CI use.
 
 ## Docker Image Delivery
 
-The project produces a single Docker image (`zscout-hw-test`) that runs the test suite. Three delivery methods MUST be supported:
+The project produces a single Docker image (`zscout-hw-test`) that runs the test suite and web dashboard. Three delivery methods MUST be supported:
 
 1. **Container Registry (GHCR)** — Primary method when internet is available
    - Image published to `ghcr.io/bulzi-org/zscout-hw-test` via GitHub Actions
@@ -83,4 +100,4 @@ The project produces a single Docker image (`zscout-hw-test`) that runs the test
 
 This constitution supersedes all other development practices in this repository. Amendments require documentation in a commit message explaining the rationale. All PRs must verify compliance with these principles.
 
-**Version**: 1.1.0 | **Ratified**: 2026-05-09 | **Last Amended**: 2026-05-09
+**Version**: 1.2.0 | **Ratified**: 2026-05-09 | **Last Amended**: 2026-05-09
