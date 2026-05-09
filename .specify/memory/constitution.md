@@ -28,7 +28,36 @@ Each hardware test module (GPS, uSDR, MM8108, compass) MUST be independently run
 
 ### VI. Minimal Dependencies
 
-Tests run on resource-constrained ARM64 hardware. Dependencies must be minimal and justified. Prefer standard library and tools already present in the zSCOUT base image (Python 3, gpsd-clients, SoapySDR, i2c-tools). Do not introduce heavy test frameworks.
+Tests run on resource-constrained ARM64 hardware. The .NET runtime is the sole managed-code dependency. Native tool invocations (gpsd-clients, SoapySDRUtil, i2c-tools) already present in the zSCOUT base image are called via `System.Diagnostics.Process`. Do not introduce additional heavy frameworks beyond xUnit for testing.
+
+## Technology Stack (NON-NEGOTIABLE)
+
+- **Language**: C# 13
+- **Runtime**: .NET 10 (LTS) — `mcr.microsoft.com/dotnet/runtime:10.0` and `mcr.microsoft.com/dotnet/sdk:10.0` base images
+- **Target architecture**: `linux-arm64` (Raspberry Pi CM5 / BCM2712)
+- **Test framework**: xUnit (for unit and integration tests within the solution)
+- **Build**: `dotnet publish -r linux-arm64 --self-contained false` (framework-dependent, runtime provided by Docker image)
+- **Container**: Multi-stage Dockerfile — SDK image for build, runtime image for execution
+
+## Docker Image Delivery
+
+The project produces a single Docker image (`zscout-hw-test`) that runs the test suite. Three delivery methods MUST be supported:
+
+1. **Container Registry (GHCR)** — Primary method when internet is available
+   - Image published to `ghcr.io/bulzi-org/zscout-hw-test` via GitHub Actions
+   - On CM5: `docker pull ghcr.io/bulzi-org/zscout-hw-test:latest && docker run ...`
+   - Cross-built with `docker buildx --platform linux/arm64`
+
+2. **Offline Transfer (`docker save` / `docker load`)** — For field/air-gapped use
+   - Dev machine: `docker save zscout-hw-test:latest -o zscout-hw-test.tar`
+   - Transfer via SCP over WiFi: `scp zscout-hw-test.tar pi@<cm5-ip>:~/`
+   - On CM5: `docker load -i zscout-hw-test.tar`
+   - A convenience script (`scripts/export-image.sh`) automates the save+transfer
+
+3. **Baked into SD Card Image** — For zero-touch deployment
+   - `zSCOUT-image-CM5` pi-gen build pre-loads the test image tarball
+   - Image available immediately after flashing without pull or transfer
+   - Coordination: provide a `deploy/zscout-hw-test.tar` artifact for the image builder
 
 ## Hardware Constraints
 
@@ -40,7 +69,7 @@ Tests run on resource-constrained ARM64 hardware. Dependencies must be minimal a
   - Morse Micro MM8108 Wi-Fi HaLow → `morse_driver` kernel module
   - QMC5883L compass → I2C bus 1
 - **Docker runtime**: Docker Engine + Docker Compose, containers use `privileged: true` and `network_mode: host` per production config
-- **Network access**: WiFi + Bluetooth for SSH; no guaranteed internet during testing
+- **Network access**: WiFi + Bluetooth for SSH; internet availability varies by deployment
 
 ## Development Workflow
 
@@ -54,4 +83,4 @@ Tests run on resource-constrained ARM64 hardware. Dependencies must be minimal a
 
 This constitution supersedes all other development practices in this repository. Amendments require documentation in a commit message explaining the rationale. All PRs must verify compliance with these principles.
 
-**Version**: 1.0.0 | **Ratified**: 2026-05-09 | **Last Amended**: 2026-05-09
+**Version**: 1.1.0 | **Ratified**: 2026-05-09 | **Last Amended**: 2026-05-09
