@@ -52,6 +52,8 @@ public sealed class RunOrchestrator
 
 		_logger.LogInformation("Run {RunId} started in {Mode} mode", runId, run.Mode);
 
+		using var scope = _logger.BeginScope(new Dictionary<string, object> { ["RunId"] = runId, ["RunMode"] = run.Mode.ToString() });
+
 		// Execute all adapters concurrently (T024: isolated — each catches its own exceptions)
 		var adapterTasks = _adapters.Select(adapter => ProbeAdapterSafeAsync(adapter, run, ct));
 		var evidenceList = await Task.WhenAll(adapterTasks);

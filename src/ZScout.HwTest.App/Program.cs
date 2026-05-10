@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
+using ZScout.HwTest.App;
 using ZScout.HwTest.App.Api;
 using ZScout.HwTest.App.Auth;
 using ZScout.HwTest.App.Dashboard.Hubs;
@@ -13,6 +14,15 @@ using ZScout.HwTest.App.Runs;
 using ZScout.HwTest.App.Streams;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// ── Structured logging (T040) ─────────────────────────────────────────────────
+builder.Logging.ClearProviders();
+builder.Logging.AddJsonConsole(opts =>
+{
+	opts.TimestampFormat = "O";
+	opts.UseUtcTimestamp = true;
+	opts.IncludeScopes = true;
+});
 
 // ── Authentication & Authorization ─────────────────────────────────────────
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
@@ -76,6 +86,7 @@ var app = builder.Build();
 
 // ── Middleware pipeline ──────────────────────────────────────────────────────
 app.UseStaticFiles();
+app.UseMiddleware<CorrelationMiddleware>(); // T040: correlation IDs
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();
