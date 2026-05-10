@@ -7,7 +7,7 @@
 
 **Purpose**: Initialize solution, deployment scaffolding, and baseline configuration.
 
-- [ ] T001 Create .NET solution and projects in `zSCOUT-hw-test.sln`, `src/ZScout.HwTest.App/ZScout.HwTest.App.csproj`, `src/ZScout.HwTest.Cli/ZScout.HwTest.Cli.csproj`, and `src/ZScout.HwTest.Contracts/ZScout.HwTest.Contracts.csproj`
+- [ ] T001 Create .NET solution and projects in `zSCOUT-hw-test.slnx` (generated with `dotnet new sln --format slnx`), `src/ZScout.HwTest.App/ZScout.HwTest.App.csproj`, `src/ZScout.HwTest.Cli/ZScout.HwTest.Cli.csproj`, and `src/ZScout.HwTest.Contracts/ZScout.HwTest.Contracts.csproj`
 - [ ] T002 Configure shared build settings and package versions in `Directory.Build.props` and `Directory.Packages.props`
 - [ ] T003 [P] Add container build and runtime scaffolding in `deploy/Dockerfile` and `deploy/docker-compose.yml`
 - [ ] T004 [P] Add image distribution helper script in `deploy/export-image.sh`
