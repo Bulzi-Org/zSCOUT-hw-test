@@ -12,13 +12,13 @@ public enum RunMode { Host, Container }
 
 public enum RunStatus
 {
-    Queued,
-    Running,
-    AwaitingVerdict,
-    Completed,
-    Failed,
-    Stopped,
-    Rejected
+	Queued,
+	Running,
+	AwaitingVerdict,
+	Completed,
+	Failed,
+	Stopped,
+	Rejected
 }
 
 public enum VerdictOutcome { Pass, Fail }

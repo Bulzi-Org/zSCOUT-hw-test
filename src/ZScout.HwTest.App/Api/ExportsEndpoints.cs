@@ -8,14 +8,14 @@ namespace ZScout.HwTest.App.Api;
 /// </summary>
 public static class ExportsEndpoints
 {
-    public static IEndpointRouteBuilder MapExportsEndpoints(this IEndpointRouteBuilder app)
-    {
-        var group = app.MapGroup("/api/exports").WithTags("Exports")
-            .RequireAuthorization(PolicyNames.RequireOperator);
+	public static IEndpointRouteBuilder MapExportsEndpoints(this IEndpointRouteBuilder app)
+	{
+		var group = app.MapGroup("/api/exports").WithTags("Exports")
+			.RequireAuthorization(PolicyNames.RequireOperator);
 
-        group.MapGet("/", async (ExportJobRepository repo, CancellationToken ct) =>
-            Results.Ok(await repo.GetAllAsync(ct)));
+		group.MapGet("/", async (ExportJobRepository repo, CancellationToken ct) =>
+			Results.Ok(await repo.GetAllAsync(ct)));
 
-        return app;
-    }
+		return app;
+	}
 }

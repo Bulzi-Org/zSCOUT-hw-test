@@ -7,13 +7,13 @@ namespace ZScout.HwTest.App.Api;
 /// </summary>
 public static class StreamsEndpoints
 {
-    public static IEndpointRouteBuilder MapStreamsEndpoints(this IEndpointRouteBuilder app)
-    {
-        var group = app.MapGroup("/api/streams").WithTags("Streams")
-            .RequireAuthorization(PolicyNames.RequireViewer);
+	public static IEndpointRouteBuilder MapStreamsEndpoints(this IEndpointRouteBuilder app)
+	{
+		var group = app.MapGroup("/api/streams").WithTags("Streams")
+			.RequireAuthorization(PolicyNames.RequireViewer);
 
-        group.MapGet("/{runId}/{peripheralId}", () => Results.Ok(Array.Empty<object>()));
+		group.MapGet("/{runId}/{peripheralId}", () => Results.Ok(Array.Empty<object>()));
 
-        return app;
-    }
+		return app;
+	}
 }

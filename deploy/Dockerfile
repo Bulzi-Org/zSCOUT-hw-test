@@ -29,7 +29,7 @@ LABEL org.opencontainers.image.url="https://github.com/Bulzi-Org/zSCOUT-hw-test"
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:5000/health || exit 1
+	CMD curl -f http://localhost:5000/health || exit 1
 
 # Expose port for dashboard
 EXPOSE 5000

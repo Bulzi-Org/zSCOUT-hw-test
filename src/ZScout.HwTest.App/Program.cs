@@ -1,24 +1,24 @@
+using Microsoft.AspNetCore.Authentication.Cookies;
 using ZScout.HwTest.App.Api;
 using ZScout.HwTest.App.Auth;
 using ZScout.HwTest.App.Dashboard.Hubs;
 using ZScout.HwTest.App.Persistence;
 using ZScout.HwTest.App.Runs;
 using ZScout.HwTest.App.Streams;
-using Microsoft.AspNetCore.Authentication.Cookies;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // ── Authentication & Authorization ─────────────────────────────────────────
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
-    .AddCookie(opts =>
-    {
-        opts.LoginPath = "/login";
-        opts.LogoutPath = "/api/auth/logout";
-        opts.Cookie.HttpOnly = true;
-        opts.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
-        opts.SlidingExpiration = true;
-        opts.ExpireTimeSpan = TimeSpan.FromHours(8);
-    });
+	.AddCookie(opts =>
+	{
+		opts.LoginPath = "/login";
+		opts.LogoutPath = "/api/auth/logout";
+		opts.Cookie.HttpOnly = true;
+		opts.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+		opts.SlidingExpiration = true;
+		opts.ExpireTimeSpan = TimeSpan.FromHours(8);
+	});
 
 builder.Services.AddAuthorization(AuthorizationPolicies.Register);
 

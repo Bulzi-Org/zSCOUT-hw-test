@@ -7,8 +7,8 @@ namespace ZScout.HwTest.App.Auth;
 /// </summary>
 public interface IUserStore
 {
-    Task<UserAccount?> FindByUsernameAsync(string username, CancellationToken ct = default);
-    Task<UserAccount?> FindByIdAsync(string userId, CancellationToken ct = default);
-    Task<IReadOnlyList<UserAccount>> GetAllAsync(CancellationToken ct = default);
-    Task UpsertAsync(UserAccount account, CancellationToken ct = default);
+	Task<UserAccount?> FindByUsernameAsync(string username, CancellationToken ct = default);
+	Task<UserAccount?> FindByIdAsync(string userId, CancellationToken ct = default);
+	Task<IReadOnlyList<UserAccount>> GetAllAsync(CancellationToken ct = default);
+	Task UpsertAsync(UserAccount account, CancellationToken ct = default);
 }
