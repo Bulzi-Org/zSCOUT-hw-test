@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\ZScout.HwTest.Contracts\ZScout.HwTest.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\ZScout.HwTest.App\ZScout.HwTest.App.csproj" />
   </ItemGroup>
 
 </Project>

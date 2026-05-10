@@ -2,6 +2,11 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using ZScout.HwTest.App.Api;
 using ZScout.HwTest.App.Auth;
 using ZScout.HwTest.App.Dashboard.Hubs;
+using ZScout.HwTest.App.Hardware.Common;
+using ZScout.HwTest.App.Hardware.Compass;
+using ZScout.HwTest.App.Hardware.Gps;
+using ZScout.HwTest.App.Hardware.Halow;
+using ZScout.HwTest.App.Hardware.Sdr;
 using ZScout.HwTest.App.Persistence;
 using ZScout.HwTest.App.Runs;
 using ZScout.HwTest.App.Streams;
@@ -37,6 +42,16 @@ builder.Services.AddScoped<LocalAuthService>();
 // ── Run Services ─────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<RunLockService>();
 builder.Services.AddSingleton<RunResultSerializer>();
+
+// ── Hardware Adapters ─────────────────────────────────────────────────────────
+builder.Services.AddSingleton<IHardwareAdapter, GpsAdapter>();
+builder.Services.AddSingleton<IHardwareAdapter, SdrAdapter>();
+builder.Services.AddSingleton<IHardwareAdapter, HalowAdapter>();
+builder.Services.AddSingleton<IHardwareAdapter, CompassAdapter>();
+
+// ── Run Orchestration ─────────────────────────────────────────────────────────
+builder.Services.AddSingleton<RunOrchestrator>();
+builder.Services.AddSingleton<VerdictService>();
 
 // ── SignalR & Live Events ────────────────────────────────────────────────────
 builder.Services.AddSignalR();

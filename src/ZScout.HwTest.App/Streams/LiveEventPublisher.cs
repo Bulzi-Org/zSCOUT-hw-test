@@ -8,7 +8,7 @@ namespace ZScout.HwTest.App.Streams;
 /// Publishes live events to all connected SignalR clients.
 /// Injected into the run orchestrator and adapters to push real-time updates.
 /// </summary>
-public sealed class LiveEventPublisher
+public class LiveEventPublisher
 {
 	private readonly IHubContext<HardwareStatusHub> _hub;
 
@@ -17,20 +17,20 @@ public sealed class LiveEventPublisher
 		_hub = hub;
 	}
 
-	public async Task PublishRunStatusAsync(string runId, RunStatus status, CancellationToken ct = default)
+	public virtual async Task PublishRunStatusAsync(string runId, RunStatus status, CancellationToken ct = default)
 		=> await _hub.Clients.All.SendAsync(
 			HubEvents.RunStatusChanged,
 			new { runId, status = status.ToString() },
 			ct);
 
-	public async Task PublishPeripheralStatusAsync(
+	public virtual async Task PublishPeripheralStatusAsync(
 		string runId, PeripheralId peripheralId, PeripheralStatus status, CancellationToken ct = default)
 		=> await _hub.Clients.All.SendAsync(
 			HubEvents.PeripheralStatusChanged,
 			new { runId, peripheralId = peripheralId.ToString(), status = status.ToString() },
 			ct);
 
-	public async Task PublishTelemetrySampleAsync(
+	public virtual async Task PublishTelemetrySampleAsync(
 		string runId, PeripheralId peripheralId, string sample, CancellationToken ct = default)
 		=> await _hub.Clients.All.SendAsync(
 			HubEvents.TelemetrySample,

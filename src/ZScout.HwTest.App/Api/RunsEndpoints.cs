@@ -32,6 +32,7 @@ public static class RunsEndpoints
 			StartRunRequest req,
 			RunLockService lockSvc,
 			RunRepository runs,
+			RunOrchestrator orchestrator,
 			LiveEventPublisher events,
 			HttpContext ctx,
 			CancellationToken ct) =>
@@ -53,6 +54,14 @@ public static class RunsEndpoints
 			};
 			await runs.SaveAsync(run, ct);
 			await events.PublishRunStatusAsync(run.RunId, run.Status, ct);
+
+			// Fire-and-forget: orchestrator runs in background, caller gets 202 immediately
+			_ = Task.Run(async () =>
+			{
+				try { await orchestrator.ExecuteAsync(run.RunId); }
+				catch { /* orchestrator logs internally */ }
+			});
+
 			return Results.Accepted($"/api/runs/{run.RunId}", run);
 		}).RequireAuthorization(PolicyNames.RequireOperator);
 
