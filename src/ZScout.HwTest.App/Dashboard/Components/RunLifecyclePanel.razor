@@ -1,0 +1,56 @@
+@inject LiveEventPublisher LiveEvents
+@implements IDisposable
+
+<div class="run-steps my-2">
+    @foreach (var (step, label) in _steps)
+    {
+        var isActive = _currentStatus == step;
+        var isPast = _order.IndexOf(_currentStatus) > _order.IndexOf(step);
+        <span class="run-step @(isActive ? "active" : isPast ? "completed" : "")">
+            @label
+        </span>
+        @if (step != _steps[^1].Status)
+        {
+            <span class="run-step-arrow">›</span>
+        }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string RunId { get; set; } = "";
+    [Parameter, EditorRequired] public RunStatus CurrentStatus { get; set; }
+
+    private RunStatus _currentStatus;
+
+    private static readonly List<(RunStatus Status, string Label)> _steps =
+    [
+        (RunStatus.Queued,          "Queued"),
+        (RunStatus.Running,         "Running"),
+        (RunStatus.AwaitingVerdict, "Awaiting Verdict"),
+        (RunStatus.Completed,       "Completed"),
+    ];
+
+    private static readonly List<RunStatus> _order = _steps.Select(s => s.Status).ToList();
+
+    protected override void OnParametersSet()
+    {
+        _currentStatus = CurrentStatus;
+    }
+
+    protected override void OnInitialized()
+    {
+        LiveEvents.RunStatusChanged += OnRunStatusChanged;
+    }
+
+    private void OnRunStatusChanged(object? sender, RunStatusEventArgs e)
+    {
+        if (e.RunId != RunId) return;
+        _ = InvokeAsync(() =>
+        {
+            _currentStatus = e.Status;
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose() => LiveEvents.RunStatusChanged -= OnRunStatusChanged;
+}

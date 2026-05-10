@@ -1,0 +1,38 @@
+@page "/login"
+@* Static SSR — no interactive render mode; form POST sets the cookie server-side *@
+
+<PageTitle>Sign In – zSCOUT</PageTitle>
+
+<div class="login-wrap">
+    <div class="login-card">
+        <div class="logo">zSCOUT</div>
+        <div class="subtitle">Hardware Test Dashboard</div>
+
+        @if (Error)
+        {
+            <div class="alert alert-danger py-2 mb-3" role="alert">
+                Invalid username or password.
+            </div>
+        }
+
+        <form method="post" action="/account/login">
+            <input type="hidden" name="returnUrl" value="@(ReturnUrl ?? "/")" />
+            <div class="mb-3">
+                <label for="username" class="form-label">Username</label>
+                <input id="username" name="username" type="text" class="form-control"
+                       autocomplete="username" required />
+            </div>
+            <div class="mb-3">
+                <label for="password" class="form-label">Password</label>
+                <input id="password" name="password" type="password" class="form-control"
+                       autocomplete="current-password" required />
+            </div>
+            <button type="submit" class="btn btn-primary w-100">Sign In</button>
+        </form>
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery] public string? ReturnUrl { get; set; }
+    [SupplyParameterFromQuery] public bool Error { get; set; }
+}

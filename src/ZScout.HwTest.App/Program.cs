@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using ZScout.HwTest.App.Api;
 using ZScout.HwTest.App.Auth;
 using ZScout.HwTest.App.Dashboard.Hubs;
+using ZScout.HwTest.App.Dashboard.Services;
 using ZScout.HwTest.App.Hardware.Common;
 using ZScout.HwTest.App.Hardware.Compass;
 using ZScout.HwTest.App.Hardware.Gps;
@@ -26,6 +27,7 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 	});
 
 builder.Services.AddAuthorization(AuthorizationPolicies.Register);
+builder.Services.AddCascadingAuthenticationState();
 
 // ── Persistence ─────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<RunRepository>();
@@ -42,6 +44,7 @@ builder.Services.AddScoped<LocalAuthService>();
 // ── Run Services ─────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<RunLockService>();
 builder.Services.AddSingleton<RunResultSerializer>();
+builder.Services.AddSingleton<RunConfigurationService>();
 
 // ── Hardware Adapters ─────────────────────────────────────────────────────────
 builder.Services.AddSingleton<IHardwareAdapter, GpsAdapter>();
@@ -57,14 +60,46 @@ builder.Services.AddSingleton<VerdictService>();
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<LiveEventPublisher>();
 
+// ── Dashboard (Blazor Server) ─────────────────────────────────────────────────
+builder.Services.AddRazorComponents()
+	.AddInteractiveServerComponents();
+builder.Services.AddScoped<AuthStateService>();
+builder.Services.AddScoped<RunCommandService>();
+
 // ── Misc ─────────────────────────────────────────────────────────────────────
 builder.Services.AddHealthChecks();
 
 var app = builder.Build();
 
 // ── Middleware pipeline ──────────────────────────────────────────────────────
+app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseAntiforgery();
+
+// ── Form-based auth endpoints (used by Login.razor / MainLayout logout button) ──
+app.MapPost("/account/login", async (HttpContext ctx, LocalAuthService auth) =>
+{
+	var form = ctx.Request.Form;
+	var username = form["username"].ToString();
+	var password = form["password"].ToString();
+	var returnUrl = form["returnUrl"].FirstOrDefault() ?? "/";
+
+	var user = await auth.ValidateCredentialsAsync(username, password);
+	if (user is null) return Results.Redirect("/login?error=true");
+
+	await LocalAuthService.SignInAsync(ctx, user);
+	// Sanitize returnUrl to prevent open redirect
+	return Uri.IsWellFormedUriString(returnUrl, UriKind.Relative)
+		? Results.Redirect(returnUrl)
+		: Results.Redirect("/");
+}).DisableAntiforgery();
+
+app.MapPost("/account/logout", async (HttpContext ctx) =>
+{
+	await LocalAuthService.SignOutAsync(ctx);
+	return Results.Redirect("/login");
+}).RequireAuthorization().DisableAntiforgery();
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.MapHealthChecks("/health");
@@ -76,6 +111,9 @@ app.MapPeripheralsEndpoints();
 app.MapStreamsEndpoints();
 app.MapExportsEndpoints();
 
-// Dashboard UI will be wired in Phase 4 (Blazor Server components)
+// ── Blazor Server components ──────────────────────────────────────────────────
+app.MapRazorComponents<ZScout.HwTest.App.App>()
+	.AddInteractiveServerRenderMode();
 
+app.Run();
 app.Run();
