@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>ZScout.HwTest.Contracts</AssemblyName>
+    <RootNamespace>ZScout.HwTest.Contracts</RootNamespace>
+  </PropertyGroup>
+</Project>

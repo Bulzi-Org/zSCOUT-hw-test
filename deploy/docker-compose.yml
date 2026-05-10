@@ -1,0 +1,11 @@
+services:
+  zscout-hw-test:
+    image: ghcr.io/bulzi-org/zscout-hw-test:latest
+    container_name: zscout-hw-test
+    privileged: true
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_URLS=http://0.0.0.0:5000
+    volumes:
+      - /var/lib/zscout-hw-test:/var/lib/zscout-hw-test

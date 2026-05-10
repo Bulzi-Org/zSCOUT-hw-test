@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>ZScout.HwTest.Cli</AssemblyName>
+    <RootNamespace>ZScout.HwTest.Cli</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../ZScout.HwTest.Contracts/ZScout.HwTest.Contracts.csproj" />
+  </ItemGroup>
+</Project>
