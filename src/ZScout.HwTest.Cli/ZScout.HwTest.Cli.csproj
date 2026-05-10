@@ -5,6 +5,11 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <RootNamespace>ZScout.HwTest.Cli</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ZScout.HwTest.Contracts\ZScout.HwTest.Contracts.csproj" />
+  </ItemGroup>
 
 </Project>
