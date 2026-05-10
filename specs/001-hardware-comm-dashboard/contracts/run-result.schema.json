@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bulzi.org/schemas/zscout-hw-test/run-result.schema.json",
+  "title": "zSCOUT Hardware Test Run Result",
+  "type": "object",
+  "required": [
+    "runId",
+    "mode",
+    "status",
+    "startedAtUtc",
+    "peripherals"
+  ],
+  "properties": {
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["host", "container"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["queued", "running", "awaiting_verdict", "completed", "failed", "stopped", "rejected"]
+    },
+    "startedAtUtc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finishedAtUtc": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "overallOutcome": {
+      "type": ["string", "null"],
+      "enum": ["pass", "fail", "inconclusive", null]
+    },
+    "rejectionReason": {
+      "type": ["string", "null"]
+    },
+    "peripherals": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "$ref": "#/$defs/peripheralResult"
+      }
+    }
+  },
+  "$defs": {
+    "peripheralResult": {
+      "type": "object",
+      "required": [
+        "peripheralId",
+        "dependencyAvailable",
+        "diagnostics",
+        "evidence",
+        "verdict"
+      ],
+      "properties": {
+        "peripheralId": {
+          "type": "string",
+          "enum": ["gps", "sdr", "halow", "compass"]
+        },
+        "dependencyAvailable": {
+          "type": "boolean"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "required": ["sampleCount", "latestSampleAtUtc"],
+          "properties": {
+            "sampleCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "latestSampleAtUtc": {
+              "type": ["string", "null"],
+              "format": "date-time"
+            },
+            "summary": {
+              "type": ["string", "null"]
+            }
+          },
+          "additionalProperties": true
+        },
+        "verdict": {
+          "type": ["object", "null"],
+          "required": ["outcome", "assignedBy", "assignedAtUtc"],
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "enum": ["pass", "fail"]
+            },
+            "failureReason": {
+              "type": ["string", "null"]
+            },
+            "assignedBy": {
+              "type": "string"
+            },
+            "assignedAtUtc": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "outcome": {
+                    "const": "fail"
+                  }
+                }
+              },
+              "then": {
+                "required": ["failureReason"]
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
