@@ -1,5 +1,0 @@
-<Solution>
-  <Project Path="src/ZScout.HwTest.App/ZScout.HwTest.App.csproj" />
-  <Project Path="src/ZScout.HwTest.Cli/ZScout.HwTest.Cli.csproj" />
-  <Project Path="src/ZScout.HwTest.Contracts/ZScout.HwTest.Contracts.csproj" />
-</Solution>
