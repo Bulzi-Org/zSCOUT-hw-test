@@ -1,0 +1,127 @@
+@page "/streams"
+@page "/streams/{RunId}"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject RunCommandService RunSvc
+@inject TelemetryStreamRepository StreamRepo
+@inject RunRepository RunRepo
+@implements IDisposable
+
+<PageTitle>Raw Streams – zSCOUT</PageTitle>
+
+<h4 class="mb-3">Raw Telemetry Streams</h4>
+
+<!-- Run selector -->
+<div class="d-flex gap-3 align-items-center mb-4 flex-wrap">
+    <div>
+        <label class="form-label mb-1">Run</label>
+        <select class="form-select form-select-sm" style="min-width:260px"
+                @bind="_selectedRunId" @bind:after="LoadStreamsAsync">
+            <option value="">— select a run —</option>
+            @foreach (var r in _runs)
+            {
+                <option value="@r.RunId">
+                    @r.RunId[..8]… | @r.Mode | @r.Status | @r.StartedAtUtc?.ToString("yyyy-MM-dd HH:mm")
+                </option>
+            }
+        </select>
+    </div>
+    @if (_selectedRunId is not null and not "")
+    {
+        <div>
+            <label class="form-label mb-1">Peripheral</label>
+            <select class="form-select form-select-sm" style="min-width:160px"
+                    @bind="_selectedPeripheral" @bind:after="FilterRecords">
+                <option value="">All</option>
+                @foreach (var pid in _peripherals)
+                {
+                    <option value="@pid">@pid</option>
+                }
+            </select>
+        </div>
+    }
+</div>
+
+@if (_loading)
+{
+    <div class="text-muted">Loading…</div>
+}
+else if (_selectedRunId is null or "")
+{
+    <div class="text-muted">Select a run to view its raw telemetry data.</div>
+}
+else if (_filtered.Count == 0)
+{
+    <div class="alert alert-info py-2">No telemetry records found for this selection.</div>
+}
+else
+{
+    <div class="mb-2 text-muted small">Showing @_filtered.Count record(s)</div>
+    <div style="max-height:600px; overflow-y:auto;">
+        <table class="table table-sm table-hover font-monospace" style="font-size:0.8rem">
+            <thead class="table-dark sticky-top">
+                <tr>
+                    <th style="width:180px">Timestamp (UTC)</th>
+                    <th style="width:110px">Peripheral</th>
+                    <th style="width:110px">Stream</th>
+                    <th>Payload</th>
+                    <th style="width:80px">Malformed</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var rec in _filtered)
+                {
+                    <tr class="@(rec.IsMalformed ? "table-warning" : "")">
+                        <td>@rec.TimestampUtc.ToString("yyyy-MM-dd HH:mm:ss.fff")</td>
+                        <td>@rec.PeripheralId</td>
+                        <td>@rec.StreamType</td>
+                        <td class="text-break" style="max-width:500px">@rec.Payload</td>
+                        <td>@(rec.IsMalformed ? "⚠ Yes" : "")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    [Parameter] public string? RunId { get; set; }
+
+    private static readonly PeripheralId[] _peripherals = Enum.GetValues<PeripheralId>();
+
+    private List<TestRun> _runs = [];
+    private List<TelemetryStreamRecord> _records = [];
+    private List<TelemetryStreamRecord> _filtered = [];
+
+    private string? _selectedRunId;
+    private string _selectedPeripheral = "";
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _runs = (await RunSvc.GetRecentRunsAsync(50)).ToList();
+        _selectedRunId = RunId ?? _runs.FirstOrDefault()?.RunId;
+        if (_selectedRunId is not null)
+            await LoadStreamsAsync();
+    }
+
+    private async Task LoadStreamsAsync()
+    {
+        if (string.IsNullOrEmpty(_selectedRunId)) return;
+        _loading = true;
+        _records = (await StreamRepo.GetForRunAsync(_selectedRunId)).ToList();
+        FilterRecords();
+        _loading = false;
+    }
+
+    private void FilterRecords()
+    {
+        _filtered = string.IsNullOrEmpty(_selectedPeripheral)
+            ? _records
+            : Enum.TryParse<PeripheralId>(_selectedPeripheral, out var pid)
+                ? _records.Where(r => r.PeripheralId == pid).ToList()
+                : _records;
+    }
+
+    public void Dispose() { }
+}

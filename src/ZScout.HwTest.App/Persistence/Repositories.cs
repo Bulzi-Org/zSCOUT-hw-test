@@ -69,3 +69,27 @@ public sealed class ExportJobRepository : FileBackedRepository<ExportJob>
 
 	protected override string GetId(ExportJob entity) => entity.ExportJobId;
 }
+
+public sealed class TelemetryStreamRepository : FileBackedRepository<TelemetryStreamRecord>
+{
+	public TelemetryStreamRepository(IConfiguration config) : base(
+		config["DataDirectory"] ?? Path.Combine(AppContext.BaseDirectory, "data"),
+		"telemetry.json")
+	{ }
+
+	protected override string GetId(TelemetryStreamRecord entity) => entity.StreamRecordId;
+
+	public async Task<IReadOnlyList<TelemetryStreamRecord>> GetForRunAsync(
+		string runId, CancellationToken ct = default)
+	{
+		var all = await GetAllAsync(ct);
+		return all.Where(r => r.RunId == runId).ToList();
+	}
+
+	public async Task<IReadOnlyList<TelemetryStreamRecord>> GetForRunPeripheralAsync(
+		string runId, PeripheralId peripheralId, CancellationToken ct = default)
+	{
+		var all = await GetAllAsync(ct);
+		return all.Where(r => r.RunId == runId && r.PeripheralId == peripheralId).ToList();
+	}
+}

@@ -33,9 +33,12 @@ builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddSingleton<RunRepository>();
 builder.Services.AddSingleton<EvidenceRepository>();
 builder.Services.AddSingleton<VerdictRepository>();
+builder.Services.AddSingleton<TelemetryStreamRepository>();
 builder.Services.AddSingleton<ExportJobRepository>();
 builder.Services.AddSingleton<RetentionPolicy>();
 builder.Services.AddHostedService<RetentionPrunerService>();
+builder.Services.AddSingleton<ExportService>();
+builder.Services.AddSingleton<TelemetryStreamWriter>();
 
 // ── Auth Services ────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<IUserStore, UserStore>();
@@ -109,6 +112,7 @@ app.MapAuthEndpoints();
 app.MapRunsEndpoints();
 app.MapPeripheralsEndpoints();
 app.MapStreamsEndpoints();
+app.MapHistoryEndpoints();
 app.MapExportsEndpoints();
 
 // ── Blazor Server components ──────────────────────────────────────────────────

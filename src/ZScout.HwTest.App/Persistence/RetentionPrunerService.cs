@@ -9,6 +9,7 @@ public sealed class RetentionPrunerService : BackgroundService
 	private readonly RunRepository _runs;
 	private readonly EvidenceRepository _evidence;
 	private readonly VerdictRepository _verdicts;
+	private readonly TelemetryStreamRepository _streams;
 	private readonly RetentionPolicy _policy;
 	private readonly ILogger<RetentionPrunerService> _logger;
 	private static readonly TimeSpan PruneInterval = TimeSpan.FromHours(24);
@@ -17,12 +18,14 @@ public sealed class RetentionPrunerService : BackgroundService
 		RunRepository runs,
 		EvidenceRepository evidence,
 		VerdictRepository verdicts,
+		TelemetryStreamRepository streams,
 		RetentionPolicy policy,
 		ILogger<RetentionPrunerService> logger)
 	{
 		_runs = runs;
 		_evidence = evidence;
 		_verdicts = verdicts;
+		_streams = streams;
 		_policy = policy;
 		_logger = logger;
 	}
@@ -64,6 +67,12 @@ public sealed class RetentionPrunerService : BackgroundService
 		foreach (var v in allVerdicts.Where(v => expiredRunIds.Contains(v.RunId)))
 		{
 			await _verdicts.DeleteAsync(v.VerdictId, ct);
+		}
+
+		var allStreams = await _streams.GetAllAsync(ct);
+		foreach (var s in allStreams.Where(s => expiredRunIds.Contains(s.RunId)))
+		{
+			await _streams.DeleteAsync(s.StreamRecordId, ct);
 		}
 
 		_logger.LogInformation("Retention pruner complete. Removed {Count} expired run(s).", expiredRunIds.Count);
