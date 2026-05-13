@@ -1,0 +1,56 @@
+@inherits LayoutComponentBase
+@using ZScout.HwTest.App.Dashboard.Shared
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Nav
+
+<div class="app-shell">
+    <nav class="sidebar">
+        <div class="brand">
+            zSCOUT
+            <small>HW Test Dashboard</small>
+        </div>
+        <ul class="nav flex-column mt-2">
+            <li class="nav-item">
+                <NavLink class="nav-link" href="/" Match="NavLinkMatch.All">
+                    <span class="icon">&#9654;</span> Control
+                </NavLink>
+            </li>
+            <li class="nav-item">
+                <NavLink class="nav-link" href="/streams">
+                    <span class="icon">&#128261;</span> Streams
+                </NavLink>
+            </li>
+            <li class="nav-item">
+                <NavLink class="nav-link" href="/history">
+                    <span class="icon">&#128196;</span> History
+                </NavLink>
+            </li>
+            <li class="nav-item">
+                <NavLink class="nav-link" href="/settings">
+                    <span class="icon">&#9881;</span> Settings
+                </NavLink>
+            </li>
+        </ul>
+        <footer>
+            <AuthorizeView>
+                <Authorized>
+                    <div class="mb-1">
+                        <strong>@context.User.Identity?.Name</strong>
+                        <span class="badge bg-secondary ms-1" style="font-size:0.7rem">
+                            @context.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value
+                        </span>
+                    </div>
+                    <form method="post" action="/account/logout">
+                        <button type="submit" class="btn btn-sm btn-outline-secondary w-100">Sign out</button>
+                    </form>
+                </Authorized>
+            </AuthorizeView>
+        </footer>
+    </nav>
+
+    <main class="content-area">
+        <article>
+            @Body
+        </article>
+    </main>
+</div>

@@ -1,0 +1,65 @@
+version: '3.9'
+
+services:
+  # Main zSCOUT hardware test dashboard
+  zscout-hw-test:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      platforms:
+        - linux/arm64
+    container_name: zscout-hw-test
+    restart: unless-stopped
+
+    # Networking for hardware access
+    network_mode: host # Required for gpsd, I2C, and other device access
+    privileged: true # Required for device permissions
+
+    # Port mapping (only active in bridge mode, ignored with network_mode: host)
+    # ports:
+    #   - "5000:5000"
+
+    # Volume mounts for persistent data and device access
+    volumes:
+      - /dev:/dev:ro # Device access (GPS, SDR, etc.)
+      - /sys:/sys:ro # System metrics
+      - ./data:/app/data # Persistent storage for run history
+      - ./logs:/app/logs # Application logs
+
+    # Environment configuration
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://0.0.0.0:5000
+      - DOTNET_EnableDiagnostics=0
+      - DOTNET_EnableWriteXorExecute=0
+
+    # Resource constraints (for CM5 with limited RAM)
+    deploy:
+      resources:
+        limits:
+          cpus: '2' # CM5 Lite has 4 cores
+          memory: 1024M # Conservative limit for 4GB system
+        reservations:
+          cpus: '1'
+          memory: 512M
+
+    # Healthcheck
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5000/health" ]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  data:
+    driver: local
+  logs:
+    driver: local

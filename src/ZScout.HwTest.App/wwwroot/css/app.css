@@ -1,0 +1,199 @@
+/* zSCOUT HW Test — minimal dashboard styles */
+
+:root {
+	--sidebar-width: 220px;
+	--status-ready: #198754;
+	--status-degraded: #ffc107;
+	--status-unavailable: #dc3545;
+	--status-unknown: #6c757d;
+}
+
+html,
+body {
+	height: 100%;
+	margin: 0;
+	font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+/* ── Sidebar layout ─────────────────────────────────── */
+.app-shell {
+	display: flex;
+	min-height: 100vh;
+}
+
+.sidebar {
+	width: var(--sidebar-width);
+	min-height: 100vh;
+	background: #1a1d21;
+	color: #c9d1d9;
+	display: flex;
+	flex-direction: column;
+	flex-shrink: 0;
+}
+
+.sidebar .brand {
+	padding: 1rem 1.25rem;
+	font-size: 1.1rem;
+	font-weight: 700;
+	color: #fff;
+	border-bottom: 1px solid #30363d;
+	letter-spacing: 0.03em;
+}
+
+.sidebar .brand small {
+	display: block;
+	font-size: 0.7rem;
+	font-weight: 400;
+	color: #8b949e;
+	margin-top: 1px;
+}
+
+.sidebar .nav-link {
+	color: #c9d1d9;
+	padding: 0.5rem 1.25rem;
+	border-radius: 0;
+	font-size: 0.9rem;
+}
+
+.sidebar .nav-link:hover,
+.sidebar .nav-link.active {
+	background: #30363d;
+	color: #fff;
+}
+
+.sidebar .nav-link .bi,
+.sidebar .nav-link .icon {
+	margin-right: 0.5rem;
+	width: 18px;
+	text-align: center;
+}
+
+.sidebar footer {
+	margin-top: auto;
+	padding: 0.75rem 1.25rem;
+	border-top: 1px solid #30363d;
+	font-size: 0.75rem;
+	color: #8b949e;
+}
+
+.content-area {
+	flex: 1;
+	padding: 1.5rem;
+	background: #f6f8fa;
+	overflow-y: auto;
+}
+
+/* ── Status badges ──────────────────────────────────── */
+.badge-ready {
+	background-color: var(--status-ready) !important;
+}
+
+.badge-degraded {
+	background-color: var(--status-degraded) !important;
+	color: #000 !important;
+}
+
+.badge-unavailable {
+	background-color: var(--status-unavailable) !important;
+}
+
+.badge-unknown {
+	background-color: var(--status-unknown) !important;
+}
+
+/* ── Peripheral cards ───────────────────────────────── */
+.peripheral-card {
+	transition: border-color 0.3s ease;
+}
+
+.peripheral-card.status-ready {
+	border-left: 4px solid var(--status-ready);
+}
+
+.peripheral-card.status-degraded {
+	border-left: 4px solid var(--status-degraded);
+}
+
+.peripheral-card.status-unavailable {
+	border-left: 4px solid var(--status-unavailable);
+}
+
+.peripheral-card.status-unknown {
+	border-left: 4px solid var(--status-unknown);
+}
+
+/* ── Run lifecycle steps ────────────────────────────── */
+.run-steps {
+	display: flex;
+	align-items: center;
+	gap: 0.25rem;
+	flex-wrap: wrap;
+}
+
+.run-step {
+	padding: 0.3rem 0.8rem;
+	border-radius: 1rem;
+	font-size: 0.8rem;
+	background: #e9ecef;
+	color: #6c757d;
+	white-space: nowrap;
+}
+
+.run-step.active {
+	background: #0d6efd;
+	color: #fff;
+	font-weight: 600;
+}
+
+.run-step.completed {
+	background: #198754;
+	color: #fff;
+}
+
+.run-step-arrow {
+	color: #adb5bd;
+	font-size: 0.8rem;
+}
+
+/* ── Verdict panel ──────────────────────────────────── */
+.verdict-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 1rem;
+	padding: 0.75rem 0;
+	border-bottom: 1px solid #dee2e6;
+}
+
+.verdict-row:last-child {
+	border-bottom: none;
+}
+
+/* ── Login page ─────────────────────────────────────── */
+.login-wrap {
+	min-height: 100vh;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: #1a1d21;
+}
+
+.login-card {
+	width: 100%;
+	max-width: 360px;
+	background: #fff;
+	border-radius: 0.5rem;
+	padding: 2rem;
+	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+}
+
+.login-card .logo {
+	font-size: 1.5rem;
+	font-weight: 700;
+	margin-bottom: 0.25rem;
+}
+
+.login-card .subtitle {
+	font-size: 0.8rem;
+	color: #8b949e;
+	margin-bottom: 1.5rem;
+}

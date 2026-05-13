@@ -1,0 +1,262 @@
+@page "/history"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject RunCommandService RunSvc
+@inject EvidenceRepository EvidenceRepo
+@inject VerdictRepository VerdictRepo
+@inject ExportService ExportSvc
+@inject RetentionPolicy Retention
+
+<PageTitle>History – zSCOUT</PageTitle>
+
+<h4 class="mb-3">Run History</h4>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-sm-auto">
+                <label class="form-label mb-1">Mode</label>
+                <select class="form-select form-select-sm" style="width:140px"
+                        @bind="_modeFilter" @bind:after="ApplyFilter">
+                    <option value="">All</option>
+                    <option value="Host">Host</option>
+                    <option value="Container">Container</option>
+                </select>
+            </div>
+            <div class="col-sm-auto">
+                <label class="form-label mb-1">From</label>
+                <input type="date" class="form-control form-control-sm"
+                       @bind="_fromFilter" @bind:after="ApplyFilter" />
+            </div>
+            <div class="col-sm-auto">
+                <label class="form-label mb-1">To</label>
+                <input type="date" class="form-control form-control-sm"
+                       @bind="_toFilter" @bind:after="ApplyFilter" />
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (_filtered.Count == 0)
+{
+    <div class="alert alert-info py-2">No runs match the selected filters within the retention window.</div>
+}
+else
+{
+    <div class="mb-2 text-muted small">@_filtered.Count run(s) found</div>
+    <table class="table table-sm table-hover">
+        <thead>
+            <tr>
+                <th>Run ID</th>
+                <th>Mode</th>
+                <th>Status</th>
+                <th>Outcome</th>
+                <th>Started</th>
+                <th>Finished</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var r in _filtered)
+            {
+                <tr>
+                    <td class="font-monospace small">@r.RunId[..8]…</td>
+                    <td>@r.Mode</td>
+                    <td><span class="badge bg-secondary">@r.Status</span></td>
+                    <td>
+                        @if (r.OverallOutcome.HasValue)
+                        {
+                            <span class="badge @(r.OverallOutcome == OverallOutcome.Pass ? "bg-success" : "bg-danger")">
+                                @r.OverallOutcome
+                            </span>
+                        }
+                    </td>
+                    <td class="small text-muted">@r.StartedAtUtc?.ToString("yyyy-MM-dd HH:mm")</td>
+                    <td class="small text-muted">@r.FinishedAtUtc?.ToString("HH:mm")</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-secondary py-0"
+                                @onclick="() => ToggleDetails(r.RunId)">
+                            @(_expandedRunId == r.RunId ? "▲ Hide" : "▼ Details")
+                        </button>
+                    </td>
+                </tr>
+                @if (_expandedRunId == r.RunId && _drilldown is not null)
+                {
+                    <tr>
+                        <td colspan="7" class="p-0">
+                            <div class="bg-light p-3 border-top">
+                                <div class="row g-3">
+                                    <div class="col-md-6">
+                                        <strong>Evidence</strong>
+                                        <table class="table table-sm mb-0 mt-1">
+                                            <thead><tr><th>Peripheral</th><th>Samples</th><th>Dep.</th><th>Last Sample</th></tr></thead>
+                                            <tbody>
+                                                @foreach (var ev in _drilldown.Evidence)
+                                                {
+                                                    <tr>
+                                                        <td>@ev.PeripheralId</td>
+                                                        <td>@ev.SampleCount</td>
+                                                        <td>@(ev.DependencyAvailable ? "✓" : "✗")</td>
+                                                        <td class="small">@ev.LastSampleAtUtc?.ToString("HH:mm:ss")</td>
+                                                    </tr>
+                                                }
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <strong>Verdicts</strong>
+                                        <table class="table table-sm mb-0 mt-1">
+                                            <thead><tr><th>Peripheral</th><th>Outcome</th><th>Reason</th></tr></thead>
+                                            <tbody>
+                                                @foreach (var vd in _drilldown.Verdicts)
+                                                {
+                                                    <tr>
+                                                        <td>@vd.PeripheralId</td>
+                                                        <td>
+                                                            <span class="badge @(vd.Outcome == VerdictOutcome.Pass ? "bg-success" : "bg-danger")">
+                                                                @vd.Outcome
+                                                            </span>
+                                                        </td>
+                                                        <td class="small text-muted">@vd.FailureReason</td>
+                                                    </tr>
+                                                }
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+}
+
+<!-- Export panel (Operator+) -->
+<AuthorizeView Policy="RequireOperator">
+    <Authorized>
+        <div class="card mt-4" style="max-width:500px">
+            <div class="card-body">
+                <h6 class="card-title">Export Retained Data</h6>
+                @if (_exportError is not null)
+                {
+                    <div class="alert alert-danger py-2 mb-2">@_exportError</div>
+                }
+                @if (_exportJob is not null)
+                {
+                    <div class="alert alert-success py-2 mb-2">
+                        Export ready — <a href="/api/exports/@_exportJob.ExportJobId/download">
+                            Download ZIP
+                        </a>
+                    </div>
+                }
+                <div class="d-flex gap-2 align-items-end flex-wrap">
+                    <div>
+                        <label class="form-label mb-1">From</label>
+                        <input type="date" class="form-control form-control-sm" @bind="_exportFrom" />
+                    </div>
+                    <div>
+                        <label class="form-label mb-1">To</label>
+                        <input type="date" class="form-control form-control-sm" @bind="_exportTo" />
+                    </div>
+                    <button class="btn btn-primary btn-sm align-self-end"
+                            @onclick="CreateExportAsync" disabled="@_exportBusy">
+                        @if (_exportBusy)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                        }
+                        Export ZIP
+                    </button>
+                </div>
+            </div>
+        </div>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private List<TestRun> _allRuns = [];
+    private List<TestRun> _filtered = [];
+
+    private string _modeFilter = "";
+    private DateTime _fromFilter;
+    private DateTime _toFilter;
+
+    private string? _expandedRunId;
+    private DrilldownData? _drilldown;
+
+    private DateTime _exportFrom;
+    private DateTime _exportTo;
+    private bool _exportBusy;
+    private string? _exportError;
+    private ExportJob? _exportJob;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _allRuns = (await RunSvc.GetRecentRunsAsync(200)).ToList();
+        _fromFilter = Retention.CutoffUtc.DateTime;
+        _toFilter = DateTime.UtcNow;
+        _exportFrom = _fromFilter;
+        _exportTo = _toFilter;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        var from = new DateTimeOffset(_fromFilter, TimeSpan.Zero);
+        var to = new DateTimeOffset(_toFilter, TimeSpan.Zero).AddDays(1);
+
+        _filtered = _allRuns
+            .Where(r =>
+                (string.IsNullOrEmpty(_modeFilter) || r.Mode.ToString() == _modeFilter) &&
+                (r.StartedAtUtc is null || (r.StartedAtUtc >= from && r.StartedAtUtc <= to)))
+            .OrderByDescending(r => r.StartedAtUtc)
+            .ToList();
+    }
+
+    private async Task ToggleDetails(string runId)
+    {
+        if (_expandedRunId == runId)
+        {
+            _expandedRunId = null;
+            _drilldown = null;
+            return;
+        }
+        _expandedRunId = runId;
+        var evidence = await EvidenceRepo.GetForRunAsync(runId);
+        var verdicts = await VerdictRepo.GetForRunAsync(runId);
+        _drilldown = new DrilldownData(evidence, verdicts);
+    }
+
+    private async Task CreateExportAsync()
+    {
+        _exportBusy = true;
+        _exportError = null;
+        _exportJob = null;
+        try
+        {
+            var from = new DateTimeOffset(_exportFrom, TimeSpan.Zero);
+            var to = new DateTimeOffset(_exportTo, TimeSpan.Zero).AddDays(1);
+
+            var job = await ExportSvc.CreateAsync(
+                new ExportService.CreateExportRequest(from, to, "dashboard"));
+
+            if (job.Status == ExportStatus.Ready)
+                _exportJob = job;
+            else
+                _exportError = "Export failed on server. Check logs.";
+        }
+        catch (ArgumentException ex)
+        {
+            _exportError = ex.Message;
+        }
+        finally
+        {
+            _exportBusy = false;
+        }
+    }
+
+    private sealed record DrilldownData(
+        IReadOnlyList<PeripheralEvidence> Evidence,
+        IReadOnlyList<PeripheralVerdict> Verdicts);
+}

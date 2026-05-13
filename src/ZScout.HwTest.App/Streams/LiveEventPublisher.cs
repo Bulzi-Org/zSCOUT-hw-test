@@ -1,0 +1,52 @@
+using Microsoft.AspNetCore.SignalR;
+using ZScout.HwTest.App.Dashboard.Hubs;
+using ZScout.HwTest.Contracts.Models;
+
+namespace ZScout.HwTest.App.Streams;
+
+public sealed record RunStatusEventArgs(string RunId, RunStatus Status);
+public sealed record PeripheralStatusEventArgs(string RunId, PeripheralId PeripheralId, PeripheralStatus Status);
+
+/// <summary>
+/// Publishes live events to all connected SignalR clients AND raises .NET events
+/// so Blazor Server components can subscribe directly without a JS SignalR connection.
+/// </summary>
+public class LiveEventPublisher
+{
+	private readonly IHubContext<HardwareStatusHub> _hub;
+
+	// .NET events for Blazor Server components to subscribe to
+	public event EventHandler<RunStatusEventArgs>? RunStatusChanged;
+	public event EventHandler<PeripheralStatusEventArgs>? PeripheralStatusChanged;
+
+	public LiveEventPublisher(IHubContext<HardwareStatusHub> hub)
+	{
+		_hub = hub;
+	}
+
+	public virtual async Task PublishRunStatusAsync(string runId, RunStatus status, CancellationToken ct = default)
+	{
+		RunStatusChanged?.Invoke(this, new RunStatusEventArgs(runId, status));
+		await _hub.Clients.All.SendAsync(
+			HubEvents.RunStatusChanged,
+			new { runId, status = status.ToString() },
+			ct);
+	}
+
+	public virtual async Task PublishPeripheralStatusAsync(
+		string runId, PeripheralId peripheralId, PeripheralStatus status, CancellationToken ct = default)
+	{
+		PeripheralStatusChanged?.Invoke(this, new PeripheralStatusEventArgs(runId, peripheralId, status));
+		await _hub.Clients.All.SendAsync(
+			HubEvents.PeripheralStatusChanged,
+			new { runId, peripheralId = peripheralId.ToString(), status = status.ToString() },
+			ct);
+	}
+
+	public virtual async Task PublishTelemetrySampleAsync(
+		string runId, PeripheralId peripheralId, string sample, CancellationToken ct = default)
+		=> await _hub.Clients.All.SendAsync(
+			HubEvents.TelemetrySample,
+			new { runId, peripheralId = peripheralId.ToString(), sample },
+			ct);
+}

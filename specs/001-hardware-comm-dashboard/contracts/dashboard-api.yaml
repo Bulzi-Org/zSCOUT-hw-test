@@ -1,0 +1,802 @@
+openapi: 3.1.0
+info:
+  title: zSCOUT Hardware Test Dashboard API
+  version: 1.0.0
+  description: >-
+    API contract for run orchestration, telemetry access, manual verdict capture,
+    and export operations exposed by the Blazor Server dashboard backend.
+    All API endpoints require an authenticated session (cookie-based).
+servers:
+  - url: http://{cm5Ip}:5000
+    variables:
+      cm5Ip:
+        default: 192.168.1.100
+security:
+  - sessionAuth: []
+paths:
+  /api/auth/login:
+    post:
+      summary: Start a local authenticated session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Login success
+        '401':
+          description: Invalid credentials
+  /api/auth/me:
+    get:
+      summary: Return current session identity and role
+      responses:
+        '200':
+          description: Authenticated user profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSession'
+        '401':
+          description: Not authenticated
+  /api/peripherals:
+    get:
+      summary: List supported peripherals and live status
+      responses:
+        '200':
+          description: Peripheral status list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PeripheralProfile'
+  /api/runs:
+    get:
+      summary: List historical runs
+      parameters:
+        - name: mode
+          in: query
+          schema:
+            type: string
+            enum: [host, container]
+        - name: fromUtc
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: toUtc
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Run history response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TestRun'
+    post:
+      summary: Start a new run
+      description: Requires operator or admin role
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartRunRequest'
+      responses:
+        '202':
+          description: Run accepted and queued/running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestRun'
+        '409':
+          description: Run rejected because another run is active
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/runs/{runId}:
+    get:
+      summary: Get run details including per-peripheral evidence and verdicts
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Run details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestRunDetails'
+        '404':
+          description: Run not found
+  /api/runs/{runId}/stop:
+    post:
+      summary: Stop an active run
+      description: Requires operator or admin role
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '202':
+          description: Stop accepted
+        '409':
+          description: Run is not stoppable in current state
+  /api/runs/{runId}/peripherals/{peripheralId}/verdict:
+    post:
+      summary: Submit operator verdict for one peripheral
+      description: Requires operator or admin role
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/PeripheralId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitVerdictRequest'
+      responses:
+        '201':
+          description: Verdict stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PeripheralVerdict'
+        '400':
+          description: Invalid verdict (missing FailureReason for Fail, or unknown peripheralId)
+        '404':
+          description: Run not found
+
+  /api/streams/{runId}:
+    get:
+      summary: Get all raw telemetry records for a run
+      tags: [Streams]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Telemetry stream records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TelemetryRecord'
+  /api/streams/{runId}/{peripheralId}:
+    get:
+      summary: Get raw telemetry records for a specific peripheral within a run
+      tags: [Streams]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/PeripheralId'
+      responses:
+        '200':
+          description: Filtered telemetry records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TelemetryRecord'
+
+  /api/history:
+    get:
+      summary: Paginated run history with optional filters
+      tags: [History]
+      parameters:
+        - name: mode
+          in: query
+          schema:
+            type: string
+            enum: [Host, Container]
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Earliest start date (floored to retention window CutoffUtc)
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+      responses:
+        '200':
+          description: Paginated run history
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedRunHistory'
+  /api/history/{runId}:
+    get:
+      summary: Full run detail including evidence, verdicts, and result JSON
+      tags: [History]
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Full run detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunDetail'
+        '404':
+          description: Run not found or outside retention window
+
+  /api/exports:
+    get:
+      summary: List all export jobs
+      tags: [Exports]
+      responses:
+        '200':
+          description: Export job list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExportJob'
+    post:
+      summary: Create export job for retained runs and telemetry
+      tags: [Exports]
+      description: Requires Operator or Admin role. Date range must be within the retention window.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateExportRequest'
+      responses:
+        '200':
+          description: Export job created (synchronous — artifact ready immediately)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportJob'
+        '400':
+          description: Date range outside retention window or invalid request
+  /api/exports/{jobId}:
+    get:
+      summary: Get export job status
+      tags: [Exports]
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Export job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportJob'
+        '404':
+          description: Job not found
+  /api/exports/{jobId}/download:
+    get:
+      summary: Download the ZIP artifact for a completed export job
+      tags: [Exports]
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: ZIP file binary stream
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Job not found or artifact not ready
+
+  /health:
+    get:
+      summary: ASP.NET Core health check
+      tags: [Infra]
+      security: []
+      responses:
+        '200':
+          description: Healthy
+
+components:
+  securitySchemes:
+    sessionAuth:
+      type: apiKey
+      in: cookie
+      name: .AspNetCore.Cookies
+  parameters:
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+    PeripheralId:
+      name: peripheralId
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [Gps, Sdr, Halow, Compass]
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    UserSession:
+      type: object
+      required: [userId, username, role]
+      properties:
+        userId:
+          type: string
+        username:
+          type: string
+        role:
+          type: string
+          enum: [Viewer, Operator, Admin]
+    PeripheralStatus:
+      type: object
+      properties:
+        peripheralId:
+          type: string
+        lastStatus:
+          type: string
+        lastSampleAtUtc:
+          type: string
+          format: date-time
+          nullable: true
+        dependencyAvailable:
+          type: boolean
+          nullable: true
+    PeripheralEvidence:
+      type: object
+      properties:
+        evidenceId:
+          type: string
+        runId:
+          type: string
+        peripheralId:
+          type: string
+        sampleCount:
+          type: integer
+        lastSampleAtUtc:
+          type: string
+          format: date-time
+          nullable: true
+        dependencyAvailable:
+          type: boolean
+        diagnosticMessages:
+          type: array
+          items:
+            type: string
+        rawStreamPointer:
+          type: string
+          nullable: true
+    PeripheralVerdict:
+      type: object
+      properties:
+        verdictId:
+          type: string
+        runId:
+          type: string
+        peripheralId:
+          type: string
+        outcome:
+          type: string
+          enum: [Pass, Fail]
+        failureReason:
+          type: string
+          nullable: true
+        assignedByUserId:
+          type: string
+        assignedAtUtc:
+          type: string
+          format: date-time
+    StartRunRequest:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [Host, Container]
+        configuration:
+          $ref: '#/components/schemas/RunConfiguration'
+    RunConfiguration:
+      type: object
+      properties:
+        timeoutSeconds:
+          type: integer
+          default: 60
+        pollingIntervalMs:
+          type: integer
+          default: 1000
+    SubmitVerdictRequest:
+      type: object
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [Pass, Fail]
+        failureReason:
+          type: string
+          nullable: true
+          description: Required when outcome is Fail.
+    TestRun:
+      type: object
+      required: [runId, mode, status, requestedByUserId, startedAtUtc]
+      properties:
+        runId:
+          type: string
+        mode:
+          type: string
+          enum: [Host, Container]
+        status:
+          type: string
+          enum: [Queued, Running, AwaitingVerdict, Completed, Failed, Stopped, Rejected]
+        requestedByUserId:
+          type: string
+        startedAtUtc:
+          type: string
+          format: date-time
+        finishedAtUtc:
+          type: string
+          format: date-time
+          nullable: true
+        rejectionReason:
+          type: string
+          nullable: true
+        overallOutcome:
+          type: string
+          enum: [Pass, Fail, Inconclusive]
+          nullable: true
+    RunDetail:
+      type: object
+      properties:
+        run:
+          $ref: '#/components/schemas/TestRun'
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/PeripheralEvidence'
+        verdicts:
+          type: array
+          items:
+            $ref: '#/components/schemas/PeripheralVerdict'
+    PagedRunHistory:
+      type: object
+      properties:
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        totalCount:
+          type: integer
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/TestRun'
+    TelemetryRecord:
+      type: object
+      required: [streamRecordId, runId, peripheralId, streamType, timestampUtc, isMalformed]
+      properties:
+        streamRecordId:
+          type: string
+        runId:
+          type: string
+        peripheralId:
+          type: string
+          enum: [Gps, Sdr, Halow, Compass]
+        streamType:
+          type: string
+        timestampUtc:
+          type: string
+          format: date-time
+        payload:
+          type: string
+          nullable: true
+        isMalformed:
+          type: boolean
+    ExportJob:
+      type: object
+      required: [exportJobId, status, createdAtUtc]
+      properties:
+        exportJobId:
+          type: string
+        requestedByUserId:
+          type: string
+        fromUtc:
+          type: string
+          format: date-time
+        toUtc:
+          type: string
+          format: date-time
+        format:
+          type: string
+          enum: [ZipJson]
+        status:
+          type: string
+          enum: [Pending, Ready, Failed, Expired]
+        artifactPath:
+          type: string
+          nullable: true
+        createdAtUtc:
+          type: string
+          format: date-time
+        expiresAtUtc:
+          type: string
+          format: date-time
+    CreateExportRequest:
+      type: object
+      required: [from, to]
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        format:
+          type: string
+          enum: [ZipJson]
+          default: ZipJson
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        activeRunId:
+          type: string
+          nullable: true
+
+      summary: Create export job for retained runs and telemetry
+      description: Requires operator or admin role
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fromUtc, toUtc, format]
+              properties:
+                fromUtc:
+                  type: string
+                  format: date-time
+                toUtc:
+                  type: string
+                  format: date-time
+                format:
+                  type: string
+                  enum: [zip-json]
+      responses:
+        '202':
+          description: Export job queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportJob'
+components:
+  securitySchemes:
+    sessionAuth:
+      type: apiKey
+      in: cookie
+      name: zscout_session
+  parameters:
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+    PeripheralId:
+      name: peripheralId
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [gps, sdr, halow, compass]
+  schemas:
+    UserSession:
+      type: object
+      required: [userId, username, role]
+      properties:
+        userId:
+          type: string
+        username:
+          type: string
+        role:
+          type: string
+          enum: [viewer, operator, admin]
+    PeripheralProfile:
+      type: object
+      required: [peripheralId, displayName, lastObservedStatus]
+      properties:
+        peripheralId:
+          type: string
+          enum: [gps, sdr, halow, compass]
+        displayName:
+          type: string
+        expectedPath:
+          type: string
+          nullable: true
+        dependencyService:
+          type: string
+          nullable: true
+        driverName:
+          type: string
+          nullable: true
+        lastObservedStatus:
+          type: string
+          enum: [unknown, ready, degraded, unavailable]
+        lastObservedAtUtc:
+          type: string
+          format: date-time
+          nullable: true
+        lastDiagnostic:
+          type: string
+          nullable: true
+    StartRunRequest:
+      type: object
+      required: [mode, configuration]
+      properties:
+        mode:
+          type: string
+          enum: [host, container]
+        configuration:
+          type: object
+          additionalProperties: true
+    SubmitVerdictRequest:
+      type: object
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [pass, fail]
+        failureReason:
+          type: string
+          nullable: true
+      allOf:
+        - if:
+            properties:
+              outcome:
+                const: fail
+          then:
+            required: [failureReason]
+    TestRun:
+      type: object
+      required: [runId, mode, status, requestedByUserId]
+      properties:
+        runId:
+          type: string
+        mode:
+          type: string
+          enum: [host, container]
+        status:
+          type: string
+          enum: [queued, running, awaiting_verdict, completed, failed, stopped, rejected]
+        requestedByUserId:
+          type: string
+        startedAtUtc:
+          type: string
+          format: date-time
+          nullable: true
+        finishedAtUtc:
+          type: string
+          format: date-time
+          nullable: true
+        rejectionReason:
+          type: string
+          nullable: true
+        overallOutcome:
+          type: string
+          enum: [pass, fail, inconclusive]
+          nullable: true
+    TestRunDetails:
+      allOf:
+        - $ref: '#/components/schemas/TestRun'
+        - type: object
+          properties:
+            evidence:
+              type: array
+              items:
+                type: object
+                properties:
+                  peripheralId:
+                    type: string
+                  sampleCount:
+                    type: integer
+                  dependencyAvailable:
+                    type: boolean
+                  diagnosticMessages:
+                    type: array
+                    items:
+                      type: string
+            verdicts:
+              type: array
+              items:
+                type: object
+                properties:
+                  peripheralId:
+                    type: string
+                  outcome:
+                    type: string
+                    enum: [pass, fail]
+                  failureReason:
+                    type: string
+                    nullable: true
+                  assignedByUserId:
+                    type: string
+                  assignedAtUtc:
+                    type: string
+                    format: date-time
+    TelemetryRecord:
+      type: object
+      required: [runId, peripheralId, streamType, timestampUtc, payload, isMalformed]
+      properties:
+        runId:
+          type: string
+        peripheralId:
+          type: string
+          enum: [gps, sdr, halow, compass]
+        streamType:
+          type: string
+          enum: [gps_nmea, sdr_info, halow_metrics, compass_heading]
+        timestampUtc:
+          type: string
+          format: date-time
+        payload:
+          description: Raw stream payload as string or JSON object
+          oneOf:
+            - type: string
+            - type: object
+              additionalProperties: true
+        isMalformed:
+          type: boolean
+    ExportJob:
+      type: object
+      required: [exportJobId, status, createdAtUtc]
+      properties:
+        exportJobId:
+          type: string
+        status:
+          type: string
+          enum: [queued, ready, failed]
+        createdAtUtc:
+          type: string
+          format: date-time
+        expiresAtUtc:
+          type: string
+          format: date-time
+          nullable: true
+        artifactPath:
+          type: string
+          nullable: true
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string

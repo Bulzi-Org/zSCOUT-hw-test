@@ -1,0 +1,80 @@
+@page "/settings"
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = "RequireOperator")]
+@inject RunConfigurationService ConfigSvc
+
+<PageTitle>Settings – zSCOUT</PageTitle>
+
+<h4 class="mb-3">Run Settings</h4>
+
+<div class="card" style="max-width:500px">
+    <div class="card-body">
+        @if (_saved)
+        {
+            <div class="alert alert-success py-2 mb-3">Settings saved.</div>
+        }
+
+        <div class="mb-3">
+            <label class="form-label">Probe Timeout (seconds)</label>
+            <input type="number" class="form-control" min="5" max="120"
+                   @bind="_timeoutSeconds" />
+            <div class="form-text">Per-adapter probe timeout. Default: 30s.</div>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Polling Interval (ms)</label>
+            <input type="number" class="form-control" min="100" max="5000"
+                   @bind="_pollingIntervalMs" />
+            <div class="form-text">Sample polling interval. Default: 500ms.</div>
+        </div>
+
+        <div class="mb-4">
+            <label class="form-label">Compass I2C Bus</label>
+            <input type="text" class="form-control" style="max-width:120px"
+                   @bind="_i2cBus" />
+            <div class="form-text">I2C bus number for QMC5883L (default: 1 → /dev/i2c-1).</div>
+        </div>
+
+        <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_busy">
+            @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+            Save
+        </button>
+    </div>
+</div>
+
+@code {
+    private int _timeoutSeconds = 30;
+    private int _pollingIntervalMs = 500;
+    private string _i2cBus = "1";
+    private bool _busy;
+    private bool _saved;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var cfg = await ConfigSvc.GetAsync();
+        _timeoutSeconds = cfg.TimeoutSeconds;
+        _pollingIntervalMs = cfg.PollingIntervalMs;
+        _i2cBus = cfg.Paths.TryGetValue("compass_i2c_bus", out var b) ? b : "1";
+    }
+
+    private async Task SaveAsync()
+    {
+        _busy = true;
+        _saved = false;
+        try
+        {
+            var cfg = new RunConfiguration
+            {
+                TimeoutSeconds = _timeoutSeconds,
+                PollingIntervalMs = _pollingIntervalMs,
+                Paths = new Dictionary<string, string>
+                {
+                    ["compass_i2c_bus"] = _i2cBus
+                }
+            };
+            await ConfigSvc.SaveAsync(cfg);
+            _saved = true;
+        }
+        finally { _busy = false; }
+    }
+}
