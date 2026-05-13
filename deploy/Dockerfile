@@ -11,16 +11,24 @@ COPY Directory.Build.props .
 COPY Directory.Packages.props .
 COPY src/ ./src/
 
-# Restore and build
+# Restore and publish
 RUN dotnet restore
-RUN dotnet build -c Release --no-restore
+RUN dotnet publish src/ZScout.HwTest.App/ZScout.HwTest.App.csproj \
+    -c Release --no-restore -o /app/publish
 
 # Stage 2: Runtime
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-arm64v8
+# Using full aspnet image (not chiseled) — we need shell access for
+# hardware tools (gpspipe, SoapySDRUtil, i2cdetect, etc.)
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-arm64v8
 WORKDIR /app
 
-# Copy built application from build stage
-COPY --from=build /src/src/ZScout.HwTest.App/bin/Release/net10.0/publish/ .
+# Install hardware diagnostic tools needed at runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl gpsd-clients i2c-tools usbutils pciutils && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy published application from build stage
+COPY --from=build /app/publish/ .
 
 # Metadata
 LABEL org.opencontainers.image.title="zSCOUT Hardware Test Dashboard"
