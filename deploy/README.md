@@ -1,18 +1,37 @@
 # Deployment Guide
 
-## Requirements
+## Host OS options
 
-- Raspberry Pi Compute Module 5 (CM5) with CM5-IO-BASE-B carrier
-- Docker Engine 24+ (see **Host OS Setup** below)
-- Peripheral drivers installed on the host:
-  - `gpsd` running for GPS
-  - SoapySDR + Wavelet-Lab driver for uSDR
-  - `morse_driver` kernel module loaded for HaLow
-  - I²C tools (`i2c-tools`) for compass
+This container is designed to run on top of one of two host OS configurations:
+
+| Host OS | All dependencies pre-installed? | Recommended for |
+|---|---|---|
+| **`zSCOUT-image-CM5`** (custom pi-gen build) | ✅ Yes — Docker Engine, gpsd, SoapySDR, `morse_driver`, I²C, and optionally the image tarball are all baked in | Production CM5 deployment |
+| **Vanilla Raspberry Pi OS** (Bookworm, 64-bit) | ❌ No — follow the **Host OS Setup** section below | Development / first-time setup on an unprovisioned board |
+
+> **If you are using `zSCOUT-image-CM5`**, skip directly to
+> [Option 1 — Pull from GHCR](#option-1--pull-from-ghcr-online) or
+> [Option 3 — SD-card bake-in](#option-3--sd-card-bake-in) — all host
+> dependencies are already present.
 
 ---
 
-## Host OS Setup
+## Requirements
+
+- Raspberry Pi Compute Module 5 (CM5) with CM5-IO-BASE-B carrier
+- Docker Engine 24+ — provided by `zSCOUT-image-CM5`, or install manually (see below)
+- Peripheral drivers on the host:
+  - `gpsd` running for GPS
+  - SoapySDR + Wavelet-Lab uSDR driver
+  - `morse_driver` kernel module for HaLow
+  - I²C enabled for compass
+
+---
+
+## Host OS Setup (vanilla Raspberry Pi OS only)
+
+> **Skip this section if you are using `zSCOUT-image-CM5`** — every step
+> below is already handled by the pi-gen build.
 
 > **Why can't these steps be inside the container image?**
 >
