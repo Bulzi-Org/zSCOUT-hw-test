@@ -3,8 +3,8 @@
 ## Requirements
 
 - Raspberry Pi Compute Module 5 (CM5) with CM5-IO-BASE-B carrier
-- Docker 24+ (`docker --version`)
-- All peripheral drivers installed on the host:
+- Docker Engine 24+ (see **Host OS Setup** below)
+- Peripheral drivers installed on the host:
   - `gpsd` running for GPS
   - SoapySDR + Wavelet-Lab driver for uSDR
   - `morse_driver` kernel module loaded for HaLow
@@ -12,15 +12,77 @@
 
 ---
 
+## Host OS Setup
+
+Run these steps once on a fresh Raspberry Pi OS (Bookworm, 64-bit) install.
+
+### 1 — Install Docker Engine
+
+```bash
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+newgrp docker                         # apply group without logout
+sudo systemctl enable --now docker
+docker --version                      # verify ≥ 24.x
+```
+
+### 2 — Enable I²C (compass)
+
+```bash
+sudo raspi-config nonint do_i2c 0
+# or add "dtparam=i2c_arm=on" to /boot/firmware/config.txt and reboot
+```
+
+### 3 — Install and start gpsd (GPS)
+
+```bash
+sudo apt-get install -y gpsd gpsd-clients
+# Edit /etc/default/gpsd to set DEVICES and GPSD_OPTIONS for your GPS device
+sudo systemctl enable --now gpsd
+```
+
+### 4 — Install SoapySDR + uSDR driver (SDR)
+
+Follow the Wavelet-Lab driver build instructions for your uSDR hardware.
+At minimum:
+
+```bash
+sudo apt-get install -y soapysdr-tools libsoapysdr-dev
+# then build and install the Wavelet-Lab SoapySDR module
+SoapySDRUtil --find           # should list your uSDR device
+```
+
+### 5 — Load HaLow kernel module
+
+```bash
+sudo modprobe morse_driver
+# To persist across reboots:
+echo "morse_driver" | sudo tee -a /etc/modules
+```
+
+### 6 — Create working directory
+
+```bash
+mkdir -p ~/zscout/{data,logs}
+cd ~/zscout
+curl -fsSL https://raw.githubusercontent.com/Bulzi-Org/zSCOUT-hw-test/main/deploy/docker-compose.yml \
+     -o docker-compose.yml
+```
+
+---
+
 ## Option 1 — Pull from GHCR (online)
 
 ```bash
+cd ~/zscout
 docker pull ghcr.io/bulzi-org/zscout-hw-test:latest
-docker compose up
+docker compose up -d
 ```
 
-The compose file binds to the host network and mounts `/dev` and `/sys` with
-`privileged: true` so the container can reach all hardware paths.
+The compose file pulls the pre-built arm64 image, binds to the host network,
+and mounts `/dev` and `/sys` with `privileged: true` so the container can
+reach all hardware paths. The dashboard is then available at
+`http://<cm5-ip>:5000`.
 
 ---
 
