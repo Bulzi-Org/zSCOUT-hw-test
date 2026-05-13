@@ -53,6 +53,7 @@ builder.Services.AddSingleton<TelemetryStreamWriter>();
 // ── Auth Services ────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<IUserStore, UserStore>();
 builder.Services.AddScoped<LocalAuthService>();
+builder.Services.AddHostedService<DefaultAdminSeedService>();
 
 // ── Run Services ─────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<RunLockService>();

@@ -183,7 +183,28 @@ curl -fsSL https://raw.githubusercontent.com/Bulzi-Org/zSCOUT-hw-test/main/deplo
 
 ---
 
-## Option 1 — Pull from GHCR (online)
+## First login
+
+On the very first start, if `./data/users.json` does not exist, the app
+automatically creates a default **admin** account.
+
+**Default username:** `admin`
+
+**Password (one of two options):**
+
+| Option | How | When to use |
+|--------|-----|-------------|
+| Auto-generated (default) | App generates a random 16-character password and logs it once at `WARNING` level | Quick start; retrieve with `docker compose logs zscout-hw-test \| grep "default admin"` |
+| Pre-configured | Uncomment `Auth__DefaultAdminPassword` in `docker-compose.yml` and set your password before first start | Scripted / unattended setup |
+
+After logging in, navigate to **Settings → Users** to change the password or
+create additional accounts, then remove `Auth__DefaultAdminPassword` from the
+environment.
+
+> **If you missed the auto-generated password**, delete `./data/users.json`
+> and restart the container — the seed will run again on the now-empty store.
+
+---
 
 ```bash
 cd ~/zscout
