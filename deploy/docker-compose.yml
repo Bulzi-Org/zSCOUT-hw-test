@@ -1,13 +1,7 @@
-version: '3.9'
-
 services:
   # Main zSCOUT hardware test dashboard
   zscout-hw-test:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-      platforms:
-        - linux/arm64
+    image: ghcr.io/bulzi-org/zscout-hw-test:latest
     container_name: zscout-hw-test
     restart: unless-stopped
 
