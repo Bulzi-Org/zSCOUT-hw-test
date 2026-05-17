@@ -1,6 +1,5 @@
 @inherits LayoutComponentBase
 @using ZScout.HwTest.App.Dashboard.Shared
-@inject AuthenticationStateProvider AuthProvider
 @inject NavigationManager Nav
 
 <div class="app-shell">
@@ -32,19 +31,6 @@
             </li>
         </ul>
         <footer>
-            <AuthorizeView>
-                <Authorized>
-                    <div class="mb-1">
-                        <strong>@context.User.Identity?.Name</strong>
-                        <span class="badge bg-secondary ms-1" style="font-size:0.7rem">
-                            @context.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value
-                        </span>
-                    </div>
-                    <form method="post" action="/account/logout">
-                        <button type="submit" class="btn btn-sm btn-outline-secondary w-100">Sign out</button>
-                    </form>
-                </Authorized>
-            </AuthorizeView>
         </footer>
     </nav>
 

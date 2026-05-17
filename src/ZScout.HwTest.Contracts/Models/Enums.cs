@@ -1,7 +1,5 @@
 namespace ZScout.HwTest.Contracts.Models;
 
-public enum UserRole { Viewer, Operator, Admin }
-
 public enum PeripheralId { Gps, Sdr, Halow, Compass }
 
 public enum PeripheralTransport { Usb, I2c, Pcie, Net }

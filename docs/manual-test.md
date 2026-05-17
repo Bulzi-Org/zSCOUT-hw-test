@@ -375,8 +375,7 @@ docker compose logs zscout-hw-test 2>&1 | grep -E '"logLevel":"Warning|Error"'
 After `docker compose up -d`:
 
 1. Open `http://<cm5-ip>:5000` in a browser.
-2. Log in as `admin` (see [deploy/README.md](../deploy/README.md#first-login) for the password).
-3. Navigate to **Control** → click **Start Run** (Container mode).
+2. Navigate to **Control** → click **Start Run** (Container mode).
 4. Watch the live status tiles update in real time via SignalR.
 5. Navigate to **Streams** → select the completed run → verify NMEA, SDR info, and I²C rows are populated.
 6. Navigate to **History** → confirm the run appears with a `Pass` or `Fail` verdict.

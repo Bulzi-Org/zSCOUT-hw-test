@@ -29,8 +29,7 @@ docker run --rm \
   ghcr.io/bulzi-org/zscout-hw-test:latest
 ```
 
-Browse to `http://<cm5-ip>:5000` and log in with the default credentials
-(`admin` / `zscout`). Change the password immediately after first login.
+Browse to `http://<cm5-ip>:5000` to access the dashboard.
 
 ## Quick start (docker compose)
 

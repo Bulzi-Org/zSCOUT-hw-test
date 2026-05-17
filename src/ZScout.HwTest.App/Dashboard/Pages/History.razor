@@ -1,6 +1,5 @@
 @page "/history"
 @rendermode InteractiveServer
-@attribute [Authorize]
 @inject RunCommandService RunSvc
 @inject EvidenceRepository EvidenceRepo
 @inject VerdictRepository VerdictRepo
@@ -133,46 +132,42 @@ else
     </table>
 }
 
-<!-- Export panel (Operator+) -->
-<AuthorizeView Policy="RequireOperator">
-    <Authorized>
-        <div class="card mt-4" style="max-width:500px">
-            <div class="card-body">
-                <h6 class="card-title">Export Retained Data</h6>
-                @if (_exportError is not null)
-                {
-                    <div class="alert alert-danger py-2 mb-2">@_exportError</div>
-                }
-                @if (_exportJob is not null)
-                {
-                    <div class="alert alert-success py-2 mb-2">
-                        Export ready — <a href="/api/exports/@_exportJob.ExportJobId/download">
-                            Download ZIP
-                        </a>
-                    </div>
-                }
-                <div class="d-flex gap-2 align-items-end flex-wrap">
-                    <div>
-                        <label class="form-label mb-1">From</label>
-                        <input type="date" class="form-control form-control-sm" @bind="_exportFrom" />
-                    </div>
-                    <div>
-                        <label class="form-label mb-1">To</label>
-                        <input type="date" class="form-control form-control-sm" @bind="_exportTo" />
-                    </div>
-                    <button class="btn btn-primary btn-sm align-self-end"
-                            @onclick="CreateExportAsync" disabled="@_exportBusy">
-                        @if (_exportBusy)
-                        {
-                            <span class="spinner-border spinner-border-sm me-1"></span>
-                        }
-                        Export ZIP
-                    </button>
-                </div>
+<!-- Export panel -->
+<div class="card mt-4" style="max-width:500px">
+    <div class="card-body">
+        <h6 class="card-title">Export Retained Data</h6>
+        @if (_exportError is not null)
+        {
+            <div class="alert alert-danger py-2 mb-2">@_exportError</div>
+        }
+        @if (_exportJob is not null)
+        {
+            <div class="alert alert-success py-2 mb-2">
+                Export ready — <a href="/api/exports/@_exportJob.ExportJobId/download">
+                    Download ZIP
+                </a>
             </div>
+        }
+        <div class="d-flex gap-2 align-items-end flex-wrap">
+            <div>
+                <label class="form-label mb-1">From</label>
+                <input type="date" class="form-control form-control-sm" @bind="_exportFrom" />
+            </div>
+            <div>
+                <label class="form-label mb-1">To</label>
+                <input type="date" class="form-control form-control-sm" @bind="_exportTo" />
+            </div>
+            <button class="btn btn-primary btn-sm align-self-end"
+                    @onclick="CreateExportAsync" disabled="@_exportBusy">
+                @if (_exportBusy)
+                {
+                    <span class="spinner-border spinner-border-sm me-1"></span>
+                }
+                Export ZIP
+            </button>
         </div>
-    </Authorized>
-</AuthorizeView>
+    </div>
+</div>
 
 @code {
     private List<TestRun> _allRuns = [];

@@ -1,4 +1,3 @@
-using ZScout.HwTest.App.Auth;
 using ZScout.HwTest.App.Persistence;
 using ZScout.HwTest.Contracts.Models;
 
@@ -8,8 +7,7 @@ public static class PeripheralsEndpoints
 {
 	public static IEndpointRouteBuilder MapPeripheralsEndpoints(this IEndpointRouteBuilder app)
 	{
-		var group = app.MapGroup("/api/peripherals").WithTags("Peripherals")
-			.RequireAuthorization(PolicyNames.RequireViewer);
+		var group = app.MapGroup("/api/peripherals").WithTags("Peripherals");
 
 		// GET /api/peripherals — list all peripheral IDs and latest known status (T030)
 		group.MapGet("/", async (EvidenceRepository evidence, CancellationToken ct) =>

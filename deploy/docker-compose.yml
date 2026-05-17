@@ -26,12 +26,6 @@ services:
       - ASPNETCORE_URLS=http://0.0.0.0:5000
       - DOTNET_EnableDiagnostics=0
       - DOTNET_EnableWriteXorExecute=0
-      # First-boot admin account.
-      # On first start with no users.json, the app creates an 'admin' account.
-      # Set this to choose the password; omit it and the app generates a random
-      # password logged once at WARNING level (check: docker compose logs zscout-hw-test).
-      # Remove after first login and password change.
-      # - Auth__DefaultAdminPassword=change-me-now
 
     # Resource constraints (for CM5 with limited RAM)
     deploy:
