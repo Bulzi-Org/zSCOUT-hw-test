@@ -197,3 +197,10 @@ body {
 	color: #8b949e;
 	margin-bottom: 1.5rem;
 }
+
+/* Command progress log */
+.cmd-log { background:#1e2227; border-radius:4px; padding:0.5rem 0.75rem; margin-top:0.5rem; max-height:200px; overflow-y:auto; font-family:monospace; font-size:0.72rem; }
+.cmd-log-entry { margin-bottom:0.25rem; }
+.cmd-log-entry .cmd-label { color:#58a6ff; }
+.cmd-log-entry .cmd-output { color:#8b949e; white-space:pre-wrap; word-break:break-all; }
+.cmd-log-entry.error .cmd-output { color:#f85149; }
