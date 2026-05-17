@@ -167,11 +167,7 @@ else
     {
         _activeRun = await RunSvc.GetActiveRunAsync();
         _recentRuns = (await RunSvc.GetRecentRunsAsync(8)).ToList();
-
-        if (_activeRun?.Status == RunStatus.Completed)
-            _completedVerdicts = (await RunSvc.GetVerdictsAsync(_activeRun.RunId)).ToList();
-        else
-            _completedVerdicts = [];
+        _completedVerdicts = [];
     }
 
     private async Task StartRunAsync()
@@ -205,7 +201,18 @@ else
     {
         _ = InvokeAsync(async () =>
         {
-            await RefreshAsync();
+            if (e.Status == RunStatus.Completed)
+            {
+                // GetActiveRunAsync only returns active-state runs; fetch the
+                // completed run by ID so the results summary can be displayed.
+                _activeRun = await RunSvc.GetRunAsync(e.RunId);
+                _completedVerdicts = (await RunSvc.GetVerdictsAsync(e.RunId)).ToList();
+                _recentRuns = (await RunSvc.GetRecentRunsAsync(8)).ToList();
+            }
+            else
+            {
+                await RefreshAsync();
+            }
             StateHasChanged();
         });
     }
