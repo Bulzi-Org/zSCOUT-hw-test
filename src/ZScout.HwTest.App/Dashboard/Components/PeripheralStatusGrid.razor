@@ -79,6 +79,9 @@ else
 
     protected override async Task OnParametersSetAsync()
     {
+        // Clear per-run state whenever RunId changes
+        _cmdLog.Clear();
+        _liveStatus.Clear();
         _evidence = (await RunSvc.GetEvidenceAsync(RunId)).ToList();
         _loaded = true;
     }
@@ -108,7 +111,10 @@ else
         {
             if (!_cmdLog.ContainsKey(e.PeripheralId))
                 _cmdLog[e.PeripheralId] = [];
-            _cmdLog[e.PeripheralId].Add((e.Command, e.Output, e.IsError, e.TimestampUtc));
+            var log = _cmdLog[e.PeripheralId];
+            log.Add((e.Command, e.Output, e.IsError, e.TimestampUtc));
+            if (log.Count > 100)
+                log.RemoveAt(0);
             StateHasChanged();
         });
     }
