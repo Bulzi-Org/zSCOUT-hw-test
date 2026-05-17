@@ -13,8 +13,10 @@ public interface IHardwareAdapter
 	/// <summary>
 	/// Run a communication probe and return a diagnostic result.
 	/// Must not throw — exceptions are caught by the orchestrator and treated as adapter failures.
+	/// The optional <paramref name="reportStep"/> callback receives (command, output, isError)
+	/// after each shell command to enable live progress reporting.
 	/// </summary>
-	Task<DiagnosticEnvelope> ProbeAsync(RunMode mode, CancellationToken ct = default);
+	Task<DiagnosticEnvelope> ProbeAsync(RunMode mode, Func<string, string, bool, Task>? reportStep = null, CancellationToken ct = default);
 
 	/// <summary>
 	/// Stream a single raw sample for live telemetry display.

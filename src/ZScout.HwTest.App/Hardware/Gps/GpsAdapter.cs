@@ -20,7 +20,7 @@ public sealed class GpsAdapter : IHardwareAdapter
 		_config = config;
 	}
 
-	public async Task<DiagnosticEnvelope> ProbeAsync(RunMode mode, CancellationToken ct = default)
+	public async Task<DiagnosticEnvelope> ProbeAsync(RunMode mode, Func<string, string, bool, Task>? reportStep = null, CancellationToken ct = default)
 	{
 		var messages = new List<string>();
 
@@ -30,13 +30,21 @@ public sealed class GpsAdapter : IHardwareAdapter
 		messages.Add(gpsdRunning
 			? "gpsd process found"
 			: "gpsd not running – is gpsd installed and started?");
+		if (reportStep is not null)
+			await reportStep("pgrep -x gpsd", psResult.Stdout + psResult.Stderr, psResult.ExitCode != 0);
 
 		if (!gpsdRunning)
+		{
+			if (reportStep is not null)
+				await reportStep("pgrep -x gpsd", "gpsd service not running", true);
 			return DiagnosticEnvelope.Unavailable(PeripheralId, "gpsd service not running");
+		}
 
 		// 2. Capture one NMEA sentence via gpspipe
 		var pipeResult = await ProcessHelper.RunAsync(
 			"gpspipe", "-r -n 5 -w", 10_000, ct);
+		if (reportStep is not null)
+			await reportStep("gpspipe -r -n 5 -w", pipeResult.Stdout + pipeResult.Stderr, pipeResult.ExitCode != 0);
 
 		var nmeaLines = pipeResult.Stdout
 			.Split('\n', StringSplitOptions.RemoveEmptyEntries)

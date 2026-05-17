@@ -18,13 +18,15 @@ public sealed class SdrAdapter : IHardwareAdapter
 		_logger = logger;
 	}
 
-	public async Task<DiagnosticEnvelope> ProbeAsync(RunMode mode, CancellationToken ct = default)
+	public async Task<DiagnosticEnvelope> ProbeAsync(RunMode mode, Func<string, string, bool, Task>? reportStep = null, CancellationToken ct = default)
 	{
 		var messages = new List<string>();
 
 		// 1. Enumerate SoapySDR devices
 		var findResult = await ProcessHelper.RunAsync(
 			"SoapySDRUtil", "--find", 10_000, ct);
+		if (reportStep is not null)
+			await reportStep("SoapySDRUtil --find", findResult.Stdout + findResult.Stderr, findResult.ExitCode != 0);
 
 		var found = findResult.ExitCode == 0 &&
 					findResult.Stdout.Contains("driver", StringComparison.OrdinalIgnoreCase);
@@ -34,6 +36,8 @@ public sealed class SdrAdapter : IHardwareAdapter
 			messages.Add("SoapySDRUtil --find returned no devices or failed");
 			if (!string.IsNullOrWhiteSpace(findResult.Stderr))
 				messages.Add($"stderr: {findResult.Stderr.Trim()}");
+			if (reportStep is not null)
+				await reportStep("SoapySDRUtil --find", "No SoapySDR device found", true);
 			return DiagnosticEnvelope.Unavailable(PeripheralId, "No SoapySDR device found");
 		}
 
@@ -42,6 +46,8 @@ public sealed class SdrAdapter : IHardwareAdapter
 		// 2. Probe device details
 		var probeResult = await ProcessHelper.RunAsync(
 			"SoapySDRUtil", "--probe", 15_000, ct);
+		if (reportStep is not null)
+			await reportStep("SoapySDRUtil --probe", probeResult.Stdout + probeResult.Stderr, probeResult.ExitCode != 0);
 
 		var probeOk = probeResult.ExitCode == 0;
 		messages.Add(probeOk

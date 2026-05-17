@@ -19,7 +19,7 @@ public sealed class HalowAdapter : IHardwareAdapter
 		_logger = logger;
 	}
 
-	public async Task<DiagnosticEnvelope> ProbeAsync(RunMode mode, CancellationToken ct = default)
+	public async Task<DiagnosticEnvelope> ProbeAsync(RunMode mode, Func<string, string, bool, Task>? reportStep = null, CancellationToken ct = default)
 	{
 		var messages = new List<string>();
 
@@ -27,6 +27,8 @@ public sealed class HalowAdapter : IHardwareAdapter
 		var lsmodResult = await ProcessHelper.RunAsync("lsmod", "", 5_000, ct);
 		var moduleLoaded = lsmodResult.ExitCode == 0 &&
 						   lsmodResult.Stdout.Contains("morse", StringComparison.OrdinalIgnoreCase);
+		if (reportStep is not null)
+			await reportStep("lsmod", lsmodResult.Stdout + lsmodResult.Stderr, !moduleLoaded);
 
 		messages.Add(moduleLoaded
 			? "morse kernel module loaded"
@@ -36,6 +38,8 @@ public sealed class HalowAdapter : IHardwareAdapter
 		{
 			// Also check modinfo as a secondary check
 			var modinfoResult = await ProcessHelper.RunAsync("modinfo", "morse", 5_000, ct);
+			if (reportStep is not null)
+				await reportStep("modinfo morse", modinfoResult.Stdout + modinfoResult.Stderr, modinfoResult.ExitCode != 0);
 			if (modinfoResult.ExitCode == 0)
 				messages.Add("morse module available but not loaded – try: modprobe morse");
 			else
@@ -46,6 +50,8 @@ public sealed class HalowAdapter : IHardwareAdapter
 
 		// 2. Find HaLow network interface (typically wlan0 or morse0)
 		var ipResult = await ProcessHelper.RunAsync("ip", "link show", 5_000, ct);
+		if (reportStep is not null)
+			await reportStep("ip link show", ipResult.Stdout + ipResult.Stderr, ipResult.ExitCode != 0);
 		var halowIface = ipResult.Stdout
 			.Split('\n', StringSplitOptions.RemoveEmptyEntries)
 			.Where(l => l.Contains("morse", StringComparison.OrdinalIgnoreCase) ||
@@ -61,6 +67,8 @@ public sealed class HalowAdapter : IHardwareAdapter
 		// 3. Check MM8108 device presence in sysfs
 		var sysfsResult = await ProcessHelper.RunAsync(
 			"find", "/sys/bus/sdio/devices /sys/bus/pci/devices -name '*morse*' 2>/dev/null", 5_000, ct);
+		if (reportStep is not null)
+			await reportStep("find /sys/bus/.../devices -name '*morse*'", sysfsResult.Stdout + sysfsResult.Stderr, sysfsResult.ExitCode != 0);
 		var sysfsFound = !string.IsNullOrWhiteSpace(sysfsResult.Stdout);
 		messages.Add(sysfsFound
 			? $"MM8108 device found in sysfs: {sysfsResult.Stdout.Trim()}"
