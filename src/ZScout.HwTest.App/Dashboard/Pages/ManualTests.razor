@@ -1,0 +1,214 @@
+@page "/manual-tests"
+@rendermode InteractiveServer
+@using Microsoft.JSInterop
+@inject IJSRuntime JS
+
+<PageTitle>Manual Tests – zSCOUT</PageTitle>
+
+<h4 class="mb-3">Manual Test Reference</h4>
+<p class="text-muted small mb-4">Step-by-step commands to verify each peripheral from the host OS or container shell. Click the copy button to copy a command to your clipboard.</p>
+
+<div class="accordion" id="manualTestAccordion">
+
+    <!-- GPS -->
+    <div class="accordion-item">
+        <h2 class="accordion-header" id="headingGps">
+            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseGps" aria-expanded="true" aria-controls="collapseGps">
+                📡 GPS (MicoAir MG-A01 via gpsd)
+            </button>
+        </h2>
+        <div id="collapseGps" class="accordion-collapse collapse show" aria-labelledby="headingGps" data-bs-parent="#manualTestAccordion">
+            <div class="accordion-body">
+                <p class="small text-muted">Confirm the FT232 USB-to-TTL adapter is plugged in and GPS module TX→adapter RX.</p>
+
+                <h6>Host OS Shell</h6>
+                @foreach (var cmd in GpsHostCommands)
+                {
+                    <div class="d-flex align-items-start gap-2 mb-2">
+                        <code class="flex-grow-1" style="white-space:pre-wrap">@cmd</code>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => CopyToClipboardAsync(cmd)">Copy</button>
+                    </div>
+                }
+
+                <h6 class="mt-3">Container Shell</h6>
+                @foreach (var cmd in GpsContainerCommands)
+                {
+                    <div class="d-flex align-items-start gap-2 mb-2">
+                        <code class="flex-grow-1" style="white-space:pre-wrap">@cmd</code>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => CopyToClipboardAsync(cmd)">Copy</button>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <!-- SDR -->
+    <div class="accordion-item">
+        <h2 class="accordion-header" id="headingSdr">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseSdr" aria-expanded="false" aria-controls="collapseSdr">
+                📻 SDR (Wavelet-Lab uSDR via SoapySDR)
+            </button>
+        </h2>
+        <div id="collapseSdr" class="accordion-collapse collapse" aria-labelledby="headingSdr" data-bs-parent="#manualTestAccordion">
+            <div class="accordion-body">
+                <p class="small text-muted">Confirm the uSDR is seated in the M.2 slot with the A+E→M-key adapter fitted.</p>
+
+                <h6>Host OS Shell</h6>
+                @foreach (var cmd in SdrHostCommands)
+                {
+                    <div class="d-flex align-items-start gap-2 mb-2">
+                        <code class="flex-grow-1" style="white-space:pre-wrap">@cmd</code>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => CopyToClipboardAsync(cmd)">Copy</button>
+                    </div>
+                }
+
+                <h6 class="mt-3">Container Shell</h6>
+                @foreach (var cmd in SdrContainerCommands)
+                {
+                    <div class="d-flex align-items-start gap-2 mb-2">
+                        <code class="flex-grow-1" style="white-space:pre-wrap">@cmd</code>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => CopyToClipboardAsync(cmd)">Copy</button>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <!-- HaLow -->
+    <div class="accordion-item">
+        <h2 class="accordion-header" id="headingHalow">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseHalow" aria-expanded="false" aria-controls="collapseHalow">
+                📶 HaLow (Morse Micro MM8108)
+            </button>
+        </h2>
+        <div id="collapseHalow" class="accordion-collapse collapse" aria-labelledby="headingHalow" data-bs-parent="#manualTestAccordion">
+            <div class="accordion-body">
+                <p class="small text-muted">MM8108 is integrated on the CM5-IO-BASE-B. Confirm antenna is attached.</p>
+
+                <h6>Host OS Shell</h6>
+                @foreach (var cmd in HalowHostCommands)
+                {
+                    <div class="d-flex align-items-start gap-2 mb-2">
+                        <code class="flex-grow-1" style="white-space:pre-wrap">@cmd</code>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => CopyToClipboardAsync(cmd)">Copy</button>
+                    </div>
+                }
+
+                <h6 class="mt-3">Container Shell</h6>
+                @foreach (var cmd in HalowContainerCommands)
+                {
+                    <div class="d-flex align-items-start gap-2 mb-2">
+                        <code class="flex-grow-1" style="white-space:pre-wrap">@cmd</code>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => CopyToClipboardAsync(cmd)">Copy</button>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <!-- Compass -->
+    <div class="accordion-item">
+        <h2 class="accordion-header" id="headingCompass">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseCompass" aria-expanded="false" aria-controls="collapseCompass">
+                🧭 Compass (QMC5883L via I²C)
+            </button>
+        </h2>
+        <div id="collapseCompass" class="accordion-collapse collapse" aria-labelledby="headingCompass" data-bs-parent="#manualTestAccordion">
+            <div class="accordion-body">
+                <p class="small text-muted">QMC5883L connected to I²C header. SDA→GPIO2, SCL→GPIO3, 4.7kΩ pull-ups. Default address 0x0D.</p>
+
+                <h6>Host OS Shell</h6>
+                @foreach (var cmd in CompassHostCommands)
+                {
+                    <div class="d-flex align-items-start gap-2 mb-2">
+                        <code class="flex-grow-1" style="white-space:pre-wrap">@cmd</code>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => CopyToClipboardAsync(cmd)">Copy</button>
+                    </div>
+                }
+
+                <h6 class="mt-3">Container Shell</h6>
+                @foreach (var cmd in CompassContainerCommands)
+                {
+                    <div class="d-flex align-items-start gap-2 mb-2">
+                        <code class="flex-grow-1" style="white-space:pre-wrap">@cmd</code>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => CopyToClipboardAsync(cmd)">Copy</button>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+</div>
+
+@code {
+    private async Task CopyToClipboardAsync(string text)
+    {
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+    }
+
+    // GPS commands
+    private static readonly string[] GpsHostCommands =
+    [
+        "pgrep -x gpsd && echo PASS || echo FAIL",
+        "ss -lnp | grep gpsd",
+        "gpspipe -r -n 5 -w",
+        "grep DEVICES /etc/default/gpsd"
+    ];
+
+    private static readonly string[] GpsContainerCommands =
+    [
+        "pgrep -x gpsd && echo PASS || echo FAIL",
+        "gpspipe -r -n 5 -w",
+        "gpspipe -r -n 1 -w"
+    ];
+
+    // SDR commands
+    private static readonly string[] SdrHostCommands =
+    [
+        "SoapySDRUtil --find",
+        "SoapySDRUtil --probe",
+        "SoapySDRUtil --info | grep -i lime",
+        "lsusb -v 2>/dev/null | grep -A5 -i \"lime\\|wavelet\""
+    ];
+
+    private static readonly string[] SdrContainerCommands =
+    [
+        "SoapySDRUtil --find",
+        "SoapySDRUtil --probe",
+        "ls /dev/bus/usb/"
+    ];
+
+    // HaLow commands
+    private static readonly string[] HalowHostCommands =
+    [
+        "lsmod | grep morse",
+        "modinfo morse_driver",
+        "sudo modprobe morse_driver",
+        "ip link show",
+        "find /sys/bus/sdio/devices /sys/bus/pci/devices -name '*morse*' 2>/dev/null"
+    ];
+
+    private static readonly string[] HalowContainerCommands =
+    [
+        "lsmod | grep morse",
+        "ip link show | grep -E \"morse|wlan\"",
+        "find /sys/bus/sdio/devices /sys/bus/pci/devices -name '*morse*' 2>/dev/null"
+    ];
+
+    // Compass commands
+    private static readonly string[] CompassHostCommands =
+    [
+        "ls /dev/i2c-*",
+        "i2cdetect -y 1",
+        "i2cget -y 1 0x0d 0x06",
+        "i2cget -y 1 0x0d 0x00"
+    ];
+
+    private static readonly string[] CompassContainerCommands =
+    [
+        "ls /dev/i2c-*",
+        "i2cdetect -y 1",
+        "i2cget -y 1 0x0d 0x06",
+        "i2cget -y 1 0x0d 0x00"
+    ];
+}
