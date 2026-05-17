@@ -34,11 +34,7 @@ public sealed class GpsAdapter : IHardwareAdapter
 			await reportStep("pgrep -x gpsd", psResult.Stdout + psResult.Stderr, psResult.ExitCode != 0);
 
 		if (!gpsdRunning)
-		{
-			if (reportStep is not null)
-				await reportStep("pgrep -x gpsd", "gpsd service not running", true);
 			return DiagnosticEnvelope.Unavailable(PeripheralId, "gpsd service not running");
-		}
 
 		// 2. Capture one NMEA sentence via gpspipe
 		var pipeResult = await ProcessHelper.RunAsync(
