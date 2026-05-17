@@ -1,7 +1,5 @@
-using Microsoft.AspNetCore.Authentication.Cookies;
 using ZScout.HwTest.App;
 using ZScout.HwTest.App.Api;
-using ZScout.HwTest.App.Auth;
 using ZScout.HwTest.App.Dashboard.Hubs;
 using ZScout.HwTest.App.Dashboard.Services;
 using ZScout.HwTest.App.Hardware.Common;
@@ -24,21 +22,6 @@ builder.Logging.AddJsonConsole(opts =>
 	opts.IncludeScopes = true;
 });
 
-// ── Authentication & Authorization ─────────────────────────────────────────
-builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
-	.AddCookie(opts =>
-	{
-		opts.LoginPath = "/login";
-		opts.LogoutPath = "/api/auth/logout";
-		opts.Cookie.HttpOnly = true;
-		opts.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
-		opts.SlidingExpiration = true;
-		opts.ExpireTimeSpan = TimeSpan.FromHours(8);
-	});
-
-builder.Services.AddAuthorization(AuthorizationPolicies.Register);
-builder.Services.AddCascadingAuthenticationState();
-
 // ── Persistence ─────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<RunRepository>();
 builder.Services.AddSingleton<EvidenceRepository>();
@@ -49,11 +32,6 @@ builder.Services.AddSingleton<RetentionPolicy>();
 builder.Services.AddHostedService<RetentionPrunerService>();
 builder.Services.AddSingleton<ExportService>();
 builder.Services.AddSingleton<TelemetryStreamWriter>();
-
-// ── Auth Services ────────────────────────────────────────────────────────────
-builder.Services.AddSingleton<IUserStore, UserStore>();
-builder.Services.AddScoped<LocalAuthService>();
-builder.Services.AddHostedService<DefaultAdminSeedService>();
 
 // ── Run Services ─────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<RunLockService>();
@@ -77,7 +55,6 @@ builder.Services.AddSingleton<LiveEventPublisher>();
 // ── Dashboard (Blazor Server) ─────────────────────────────────────────────────
 builder.Services.AddRazorComponents()
 	.AddInteractiveServerComponents();
-builder.Services.AddScoped<AuthStateService>();
 builder.Services.AddScoped<RunCommandService>();
 
 // ── Misc ─────────────────────────────────────────────────────────────────────
@@ -88,39 +65,12 @@ var app = builder.Build();
 // ── Middleware pipeline ──────────────────────────────────────────────────────
 app.UseStaticFiles();
 app.UseMiddleware<CorrelationMiddleware>(); // T040: correlation IDs
-app.UseAuthentication();
-app.UseAuthorization();
 app.UseAntiforgery();
-
-// ── Form-based auth endpoints (used by Login.razor / MainLayout logout button) ──
-app.MapPost("/account/login", async (HttpContext ctx, LocalAuthService auth) =>
-{
-	var form = ctx.Request.Form;
-	var username = form["username"].ToString();
-	var password = form["password"].ToString();
-	var returnUrl = form["returnUrl"].FirstOrDefault() ?? "/";
-
-	var user = await auth.ValidateCredentialsAsync(username, password);
-	if (user is null) return Results.Redirect("/login?error=true");
-
-	await LocalAuthService.SignInAsync(ctx, user);
-	// Sanitize returnUrl to prevent open redirect
-	return Uri.IsWellFormedUriString(returnUrl, UriKind.Relative)
-		? Results.Redirect(returnUrl)
-		: Results.Redirect("/");
-}).DisableAntiforgery();
-
-app.MapPost("/account/logout", async (HttpContext ctx) =>
-{
-	await LocalAuthService.SignOutAsync(ctx);
-	return Results.Redirect("/login");
-}).RequireAuthorization().DisableAntiforgery();
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.MapHealthChecks("/health");
 app.MapHub<HardwareStatusHub>("/hubs/hardware");
 
-app.MapAuthEndpoints();
 app.MapRunsEndpoints();
 app.MapPeripheralsEndpoints();
 app.MapStreamsEndpoints();
@@ -131,5 +81,4 @@ app.MapExportsEndpoints();
 app.MapRazorComponents<ZScout.HwTest.App.App>()
 	.AddInteractiveServerRenderMode();
 
-app.Run();
 app.Run();

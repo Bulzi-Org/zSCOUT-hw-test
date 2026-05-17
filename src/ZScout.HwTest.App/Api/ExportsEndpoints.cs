@@ -1,4 +1,3 @@
-using ZScout.HwTest.App.Auth;
 using ZScout.HwTest.App.Persistence;
 using ZScout.HwTest.Contracts.Models;
 
@@ -11,8 +10,7 @@ public static class ExportsEndpoints
 {
 	public static IEndpointRouteBuilder MapExportsEndpoints(this IEndpointRouteBuilder app)
 	{
-		var group = app.MapGroup("/api/exports").WithTags("Exports")
-			.RequireAuthorization(PolicyNames.RequireOperator);
+		var group = app.MapGroup("/api/exports").WithTags("Exports");
 
 		// GET /api/exports — list all export jobs
 		group.MapGet("/", async (ExportJobRepository repo, CancellationToken ct) =>
@@ -22,17 +20,13 @@ public static class ExportsEndpoints
 		group.MapPost("/", async (
 			CreateExportRequest req,
 			ExportService exportSvc,
-			HttpContext ctx,
 			CancellationToken ct) =>
 		{
-			var userId = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
-				?? "unknown";
-
 			ExportJob job;
 			try
 			{
 				job = await exportSvc.CreateAsync(
-					new ExportService.CreateExportRequest(req.From, req.To, userId, req.Format), ct);
+					new ExportService.CreateExportRequest(req.From, req.To, "dashboard", req.Format), ct);
 			}
 			catch (ArgumentException ex)
 			{

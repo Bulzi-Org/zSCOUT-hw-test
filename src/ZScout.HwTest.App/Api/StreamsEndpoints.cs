@@ -1,4 +1,3 @@
-using ZScout.HwTest.App.Auth;
 using ZScout.HwTest.App.Persistence;
 using ZScout.HwTest.Contracts.Models;
 
@@ -11,8 +10,7 @@ public static class StreamsEndpoints
 {
 	public static IEndpointRouteBuilder MapStreamsEndpoints(this IEndpointRouteBuilder app)
 	{
-		var group = app.MapGroup("/api/streams").WithTags("Streams")
-			.RequireAuthorization(PolicyNames.RequireViewer);
+		var group = app.MapGroup("/api/streams").WithTags("Streams");
 
 		// GET /api/streams/{runId} — all stream records for a run
 		group.MapGet("/{runId}", async (

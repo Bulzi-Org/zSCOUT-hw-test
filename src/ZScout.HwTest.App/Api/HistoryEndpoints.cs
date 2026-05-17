@@ -1,4 +1,3 @@
-using ZScout.HwTest.App.Auth;
 using ZScout.HwTest.App.Persistence;
 using ZScout.HwTest.App.Runs;
 using ZScout.HwTest.Contracts.Models;
@@ -12,8 +11,7 @@ public static class HistoryEndpoints
 {
 	public static IEndpointRouteBuilder MapHistoryEndpoints(this IEndpointRouteBuilder app)
 	{
-		var group = app.MapGroup("/api/history").WithTags("History")
-			.RequireAuthorization(PolicyNames.RequireViewer);
+		var group = app.MapGroup("/api/history").WithTags("History");
 
 		// GET /api/history — query run history with optional filters
 		// Query params: mode, from (ISO-8601), to (ISO-8601), page (1-based), pageSize

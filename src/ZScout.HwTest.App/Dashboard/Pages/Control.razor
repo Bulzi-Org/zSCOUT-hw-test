@@ -1,8 +1,6 @@
 @page "/"
 @rendermode InteractiveServer
-@attribute [Authorize]
 @inject RunCommandService RunSvc
-@inject AuthStateService Auth
 @inject LiveEventPublisher LiveEvents
 @implements IDisposable
 
@@ -34,18 +32,11 @@
                     </select>
                 </div>
                 <div class="align-self-end">
-                    <AuthorizeView Policy="RequireOperator">
-                        <Authorized>
-                            <button class="btn btn-success btn-sm" @onclick="StartRunAsync"
-                                    disabled="@_busy">
-                                @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
-                                Start Run
-                            </button>
-                        </Authorized>
-                        <NotAuthorized>
-                            <span class="text-muted small">Operator role required to start runs.</span>
-                        </NotAuthorized>
-                    </AuthorizeView>
+                    <button class="btn btn-success btn-sm" @onclick="StartRunAsync"
+                            disabled="@_busy">
+                        @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
+                        Start Run
+                    </button>
                 </div>
             </div>
         </div>
@@ -60,15 +51,11 @@ else
                     <h6 class="card-title mb-0">Active Run</h6>
                     <small class="text-muted font-monospace">@_activeRun.RunId</small>
                 </div>
-                <AuthorizeView Policy="RequireOperator">
-                    <Authorized>
-                        @if (_activeRun.Status is RunStatus.Queued or RunStatus.Running)
-                        {
-                            <button class="btn btn-danger btn-sm" @onclick="StopRunAsync"
-                                    disabled="@_busy">Stop</button>
-                        }
-                    </Authorized>
-                </AuthorizeView>
+                @if (_activeRun.Status is RunStatus.Queued or RunStatus.Running)
+                {
+                    <button class="btn btn-danger btn-sm" @onclick="StopRunAsync"
+                            disabled="@_busy">Stop</button>
+                }
             </div>
 
             <RunLifecyclePanel RunId="@_activeRun.RunId" CurrentStatus="_activeRun.Status" />
@@ -81,63 +68,59 @@ else
     <!-- Verdict assignment (AwaitingVerdict only, Operator+) -->
     @if (_activeRun.Status == RunStatus.AwaitingVerdict)
     {
-        <AuthorizeView Policy="RequireOperator">
-            <Authorized>
-                <div class="card mt-4">
-                    <div class="card-body">
-                        <h6 class="card-title">Assign Verdicts</h6>
-                        <p class="text-muted small mb-3">
-                            Review the evidence above and assign a pass/fail outcome for each peripheral.
-                        </p>
-                        @foreach (var row in _verdictRows)
-                        {
-                            <div class="verdict-row">
-                                <div style="width:130px">
-                                    <strong>@row.PeripheralId</strong>
-                                </div>
-                                <div class="d-flex gap-3 align-items-center flex-grow-1 flex-wrap">
-                                    <div class="form-check form-check-inline">
-                                        <input class="form-check-input" type="radio"
-                                               name="verdict_@row.PeripheralId"
-                                               id="pass_@row.PeripheralId"
-                                               checked="@(row.Outcome == VerdictOutcome.Pass)"
-                                               @onchange="() => { row.Outcome = VerdictOutcome.Pass; row.FailureReason = null; }" />
-                                        <label class="form-check-label" for="pass_@row.PeripheralId">Pass</label>
-                                    </div>
-                                    <div class="form-check form-check-inline">
-                                        <input class="form-check-input" type="radio"
-                                               name="verdict_@row.PeripheralId"
-                                               id="fail_@row.PeripheralId"
-                                               checked="@(row.Outcome == VerdictOutcome.Fail)"
-                                               @onchange="() => row.Outcome = VerdictOutcome.Fail" />
-                                        <label class="form-check-label" for="fail_@row.PeripheralId">Fail</label>
-                                    </div>
-                                    @if (row.Outcome == VerdictOutcome.Fail)
-                                    {
-                                        <input type="text" class="form-control form-control-sm"
-                                               style="max-width:300px"
-                                               placeholder="Failure reason (required)"
-                                               @bind="row.FailureReason" />
-                                    }
-                                    @if (row.Submitted)
-                                    {
-                                        <span class="badge bg-success">Saved</span>
-                                    }
-                                    else
-                                    {
-                                        <button class="btn btn-primary btn-sm"
-                                                @onclick="() => SubmitVerdictAsync(row)"
-                                                disabled="@(row.Outcome == VerdictOutcome.Fail && string.IsNullOrWhiteSpace(row.FailureReason))">
-                                            Submit
-                                        </button>
-                                    }
-                                </div>
+        <div class="card mt-4">
+            <div class="card-body">
+                <h6 class="card-title">Assign Verdicts</h6>
+                <p class="text-muted small mb-3">
+                    Review the evidence above and assign a pass/fail outcome for each peripheral.
+                </p>
+                @foreach (var row in _verdictRows)
+                {
+                    <div class="verdict-row">
+                        <div style="width:130px">
+                            <strong>@row.PeripheralId</strong>
+                        </div>
+                        <div class="d-flex gap-3 align-items-center flex-grow-1 flex-wrap">
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio"
+                                       name="verdict_@row.PeripheralId"
+                                       id="pass_@row.PeripheralId"
+                                       checked="@(row.Outcome == VerdictOutcome.Pass)"
+                                       @onchange="() => { row.Outcome = VerdictOutcome.Pass; row.FailureReason = null; }" />
+                                <label class="form-check-label" for="pass_@row.PeripheralId">Pass</label>
                             </div>
-                        }
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="radio"
+                                       name="verdict_@row.PeripheralId"
+                                       id="fail_@row.PeripheralId"
+                                       checked="@(row.Outcome == VerdictOutcome.Fail)"
+                                       @onchange="() => row.Outcome = VerdictOutcome.Fail" />
+                                <label class="form-check-label" for="fail_@row.PeripheralId">Fail</label>
+                            </div>
+                            @if (row.Outcome == VerdictOutcome.Fail)
+                            {
+                                <input type="text" class="form-control form-control-sm"
+                                       style="max-width:300px"
+                                       placeholder="Failure reason (required)"
+                                       @bind="row.FailureReason" />
+                            }
+                            @if (row.Submitted)
+                            {
+                                <span class="badge bg-success">Saved</span>
+                            }
+                            else
+                            {
+                                <button class="btn btn-primary btn-sm"
+                                        @onclick="() => SubmitVerdictAsync(row)"
+                                        disabled="@(row.Outcome == VerdictOutcome.Fail && string.IsNullOrWhiteSpace(row.FailureReason))">
+                                    Submit
+                                </button>
+                            }
+                        </div>
                     </div>
-                </div>
-            </Authorized>
-        </AuthorizeView>
+                }
+            </div>
+        </div>
     }
 }
 
@@ -221,8 +204,7 @@ else
         _errorMsg = null;
         try
         {
-            var userId = await Auth.GetUserIdAsync() ?? "dashboard";
-            var (run, err) = await RunSvc.StartRunAsync(_selectedMode, userId);
+            var (run, err) = await RunSvc.StartRunAsync(_selectedMode, "dashboard");
             if (err is not null) _errorMsg = err;
             else _activeRun = run;
             _recentRuns = (await RunSvc.GetRecentRunsAsync(8)).ToList();
@@ -245,9 +227,8 @@ else
 
     private async Task SubmitVerdictAsync(VerdictRow row)
     {
-        var userId = await Auth.GetUserIdAsync() ?? "dashboard";
         var (success, err) = await RunSvc.AssignVerdictAsync(
-            _activeRun!.RunId, row.PeripheralId, row.Outcome, row.FailureReason, userId);
+            _activeRun!.RunId, row.PeripheralId, row.Outcome, row.FailureReason, "dashboard");
 
         if (success) row.Submitted = true;
         else _errorMsg = err;
