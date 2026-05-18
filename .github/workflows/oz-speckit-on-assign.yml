@@ -1,0 +1,38 @@
+name: Trigger Oz SpecKit on issue assignment
+
+on:
+  issues:
+    types: [assigned]
+
+jobs:
+  trigger-oz-speckit:
+    # Only run when the issue is assigned to the Oz agent account.
+    # Update the condition below if your Oz bot uses a different GitHub username.
+    if: github.event.assignee.login == 'oz-agent[bot]' || github.event.assignee.login == 'oz-bot'
+    runs-on: ubuntu-latest
+
+    permissions:
+      issues: write
+      contents: read
+
+    steps:
+      - name: Log trigger
+        run: |
+          echo "Issue #${{ github.event.issue.number }} assigned to ${{ github.event.assignee.login }}"
+          echo "Title: ${{ github.event.issue.title }}"
+
+      - name: Install Oz CLI
+        run: |
+          curl -fsSL https://get.warp.dev/oz.sh | bash
+          echo "$HOME/.oz/bin" >> "$GITHUB_PATH"
+
+      - name: Run Oz cloud agent with SpecKit
+        env:
+          WARP_API_KEY: ${{ secrets.WARP_API_KEY }}
+        run: |
+          oz agent run-cloud \
+            --environment ckBGoy6mlC1aa9K6XhVyJN \
+            --prompt "Use the speckit skill to take over issue #${{ github.event.issue.number }}. \
+          Assign @Bulzi-Robb as the PR reviewer. \
+          Self-assign the issue, update the zSCOUT Project board status as you progress, \
+          and notify @Bulzi-Robb when the PR is ready for review."

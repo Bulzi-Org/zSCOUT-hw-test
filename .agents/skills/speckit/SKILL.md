@@ -23,6 +23,66 @@ SpecKit is a spec-driven development workflow defined in this repository under
 Each step produces artifacts in the `.specify/` directory and hands off to the
 next step. Git operations (branching, committing) are woven in between steps.
 
+## GitHub Project Board Tracking
+
+This workflow integrates with the **zSCOUT Project** board (Bulzi-Org, project
+number 1). At key phase transitions, update the issue's status on the kanban
+board using the `gh` CLI and GraphQL API.
+
+### Project Board Reference
+
+- **Project number**: 1
+- **Owner**: Bulzi-Org
+- **Status field ID**: PVTSSF_lADOBuYw384BX6mazhTEHqU
+- **Kanban stages**:
+  - Backlog (`f75ad846`)
+  - Ready (`61e4505c`)
+  - In progress (`47fc9ee4`)
+  - In review (`df73e18b`)
+  - Done (`98236657`)
+
+### How to Update the Project Board
+
+To move an issue to a new status, run these commands:
+
+1. Get the project item ID for the issue:
+   ```
+   ITEM_ID=$(gh api graphql -f query='
+     query($org: String!, $num: Int!) {
+       organization(login: $org) {
+         projectV2(number: $num) {
+           items(first: 100) {
+             nodes {
+               id
+               content { ... on Issue { number } }
+             }
+           }
+         }
+       }
+     }' -f org="Bulzi-Org" -F num=1 \
+     --jq ".data.organization.projectV2.items.nodes[] | select(.content.number == <ISSUE_NUMBER>) | .id")
+   ```
+
+2. Update the status:
+   ```
+   gh api graphql -f query='
+     mutation($project: ID!, $item: ID!, $field: ID!, $value: String!) {
+       updateProjectV2ItemFieldValue(input: {
+         projectId: $project
+         itemId: $item
+         fieldId: $field
+         value: { singleSelectOptionId: $value }
+       }) { projectV2Item { id } }
+     }' \
+     -f project="PVT_kwDOBuYw384BX6ma" \
+     -f item="$ITEM_ID" \
+     -f field="PVTSSF_lADOBuYw384BX6mazhTEHqU" \
+     -f value="<STATUS_OPTION_ID>"
+   ```
+
+Replace `<ISSUE_NUMBER>` with the issue number and `<STATUS_OPTION_ID>` with the
+appropriate option ID from the kanban stages above.
+
 ## Workflow Steps
 
 Execute the following steps **in order**. For each step, read the corresponding
@@ -31,22 +91,34 @@ every step that produces or modifies artifacts.
 
 ### Phase 0 — Setup
 
-1. **Read the GitHub issue** — Fetch issue `$0` from the repo. Understand the
+1. **Self-assign the issue** — Assign yourself to the GitHub issue using:
+   ```
+   gh issue edit $0 --add-assignee @me --repo Bulzi-Org/zSCOUT-hw-test
+   ```
+   If `@me` is not available, use the bot/agent username.
+
+2. **Move to "In progress"** — Update the project board status to **In progress**
+   (option ID: `47fc9ee4`) using the commands in the "How to Update the Project
+   Board" section above.
+
+3. **Read the GitHub issue** — Fetch issue `$0` from the repo. Understand the
    requirements, acceptance criteria, and any linked context.
-2. **speckit.git.feature** — Create a feature branch for the issue.
+
+4. **speckit.git.feature** — Create a feature branch for the issue.
    Agent: `.github/agents/speckit.git.feature.agent.md`
-3. **speckit.git.validate** — Validate the branch name follows conventions.
+
+5. **speckit.git.validate** — Validate the branch name follows conventions.
    Agent: `.github/agents/speckit.git.validate.agent.md`
 
 ### Phase 1 — Specification
 
-4. **speckit.specify** — Create or update the feature specification from the
+6. **speckit.specify** — Create or update the feature specification from the
    issue description.
    Agent: `.github/agents/speckit.specify.agent.md`
    Prompt: `.github/prompts/speckit.specify.prompt.md`
    → Commit after completion.
 
-5. **speckit.clarify** — Identify underspecified areas and resolve them. If
+7. **speckit.clarify** — Identify underspecified areas and resolve them. If
    running autonomously (no human in the loop), use best judgment to fill gaps
    based on the issue context and existing codebase.
    Agent: `.github/agents/speckit.clarify.agent.md`
@@ -55,12 +127,12 @@ every step that produces or modifies artifacts.
 
 ### Phase 2 — Planning
 
-6. **speckit.plan** — Generate the implementation plan from the specification.
+8. **speckit.plan** — Generate the implementation plan from the specification.
    Agent: `.github/agents/speckit.plan.agent.md`
    Prompt: `.github/prompts/speckit.plan.prompt.md`
    → Commit after completion.
 
-7. **speckit.checklist** — Generate a requirements-quality checklist for the
+9. **speckit.checklist** — Generate a requirements-quality checklist for the
    feature.
    Agent: `.github/agents/speckit.checklist.agent.md`
    Prompt: `.github/prompts/speckit.checklist.prompt.md`
@@ -68,20 +140,20 @@ every step that produces or modifies artifacts.
 
 ### Phase 3 — Task Generation
 
-8. **speckit.tasks** — Break the plan into actionable, dependency-ordered tasks.
-   Agent: `.github/agents/speckit.tasks.agent.md`
-   Prompt: `.github/prompts/speckit.tasks.prompt.md`
-   → Commit after completion.
+10. **speckit.tasks** — Break the plan into actionable, dependency-ordered tasks.
+    Agent: `.github/agents/speckit.tasks.agent.md`
+    Prompt: `.github/prompts/speckit.tasks.prompt.md`
+    → Commit after completion.
 
-9. **speckit.analyze** — Cross-artifact consistency and quality analysis across
-   spec.md, plan.md, and tasks.md. Fix any issues found.
-   Agent: `.github/agents/speckit.analyze.agent.md`
-   Prompt: `.github/prompts/speckit.analyze.prompt.md`
-   → Commit after completion.
+11. **speckit.analyze** — Cross-artifact consistency and quality analysis across
+    spec.md, plan.md, and tasks.md. Fix any issues found.
+    Agent: `.github/agents/speckit.analyze.agent.md`
+    Prompt: `.github/prompts/speckit.analyze.prompt.md`
+    → Commit after completion.
 
 ### Phase 4 — Implementation
 
-10. **speckit.implement** — Execute all tasks from tasks.md. Implement the code
+12. **speckit.implement** — Execute all tasks from tasks.md. Implement the code
     changes, following the plan and specification. Commit after each meaningful
     unit of work.
     Agent: `.github/agents/speckit.implement.agent.md`
@@ -89,23 +161,26 @@ every step that produces or modifies artifacts.
 
 ### Phase 5 — Verification
 
-11. **Build verification** — Run `dotnet build` (or the project's build command)
+13. **Build verification** — Run `dotnet build` (or the project's build command)
     and fix any errors until the project compiles cleanly.
 
-12. **Self code review** — Review all changes for:
+14. **Self code review** — Review all changes for:
     - Alignment with the specification and plan
     - Missing edge cases or error handling
     - Code quality and consistency with existing patterns
     - Proper test coverage where applicable
     Fix anything found and commit.
 
+15. **Move to "In review"** — Update the project board status to **In review**
+    (option ID: `df73e18b`).
+
 ### Phase 6 — Delivery
 
-13. **Create pull request** — Push the branch and create a PR targeting `main`.
+16. **Create pull request** — Push the branch and create a PR targeting `main`.
     Link the PR to issue `$0`. Include a summary of what was implemented and
     which SpecKit steps were completed.
 
-14. **Notify reviewer** — Post a comment on issue `$0` notifying the assigned
+17. **Notify reviewer** — Post a comment on issue `$0` notifying the assigned
     reviewer that the PR is ready for review.
 
 ## Git Commit Convention
@@ -135,3 +210,5 @@ instructions. Follow them as documented.
   plans, tasks, checklists, templates, memory).
 - When running autonomously without human interaction, make reasonable decisions
   for clarification questions rather than blocking.
+- The project board status should only be moved forward, never backward. If a
+  phase fails and needs rework, keep the current status.
