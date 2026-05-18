@@ -19,6 +19,7 @@ public sealed class RunCommandService
 	private readonly VerdictService _verdictService;
 	private readonly RunConfigurationService _config;
 	private readonly LiveEventPublisher _events;
+	private readonly RunCancellationService _cancellation;
 
 	public RunCommandService(
 		RunRepository runs,
@@ -28,7 +29,8 @@ public sealed class RunCommandService
 		RunOrchestrator orchestrator,
 		VerdictService verdictService,
 		RunConfigurationService config,
-		LiveEventPublisher events)
+		LiveEventPublisher events,
+		RunCancellationService cancellation)
 	{
 		_runs = runs;
 		_evidence = evidence;
@@ -38,6 +40,7 @@ public sealed class RunCommandService
 		_verdictService = verdictService;
 		_config = config;
 		_events = events;
+		_cancellation = cancellation;
 	}
 
 	/// <summary>Start a new run; returns (run, null) on success or (null, errorMsg) on conflict.</summary>
@@ -62,10 +65,13 @@ public sealed class RunCommandService
 		await _runs.SaveAsync(run, ct);
 		await _events.PublishRunStatusAsync(run.RunId, RunStatus.Queued, ct);
 
+		// Register a CancellationTokenSource for this run so StopRunAsync can cancel it
+		var runCt = _cancellation.Register(run.RunId);
+
 		// Fire orchestrator as background task; UI gets 202-style immediate response
 		_ = Task.Run(async () =>
 		{
-			try { await _orchestrator.ExecuteAsync(run.RunId); }
+			try { await _orchestrator.ExecuteAsync(run.RunId, runCt); }
 			catch { /* orchestrator logs internally */ }
 		});
 
@@ -79,6 +85,9 @@ public sealed class RunCommandService
 		if (run is null) return "Run not found.";
 		if (run.Status is not (RunStatus.Queued or RunStatus.Running))
 			return $"Run is not active (status: {run.Status}).";
+
+		// Cancel all in-flight adapter probes (e.g. GPS streaming) before persisting Stopped
+		_cancellation.Cancel(runId);
 
 		var stopped = run with { Status = RunStatus.Stopped, FinishedAtUtc = DateTimeOffset.UtcNow };
 		await _runs.SaveAsync(stopped, ct);

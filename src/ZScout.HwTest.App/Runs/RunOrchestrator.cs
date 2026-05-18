@@ -7,7 +7,7 @@ namespace ZScout.HwTest.App.Runs;
 
 /// <summary>
 /// Orchestrates a full hardware communication test run.
-/// T020: Executes all peripheral adapters sequentially and collects per-peripheral evidence.
+/// T020: Executes all peripheral adapters concurrently via Task.WhenAll and collects per-peripheral evidence.
 /// T024: Dependency-failure isolation — adapter exceptions never stop other peripherals.
 /// Auto-assigns verdicts after all adapters complete (Ready→Pass, else→Fail).
 /// </summary>
@@ -18,6 +18,7 @@ public sealed class RunOrchestrator
 	private readonly EvidenceRepository _evidence;
 	private readonly VerdictRepository _verdicts;
 	private readonly LiveEventPublisher _events;
+	private readonly RunCancellationService _cancellation;
 	private readonly ILogger<RunOrchestrator> _logger;
 
 	public RunOrchestrator(
@@ -26,6 +27,7 @@ public sealed class RunOrchestrator
 		EvidenceRepository evidence,
 		VerdictRepository verdicts,
 		LiveEventPublisher events,
+		RunCancellationService cancellation,
 		ILogger<RunOrchestrator> logger)
 	{
 		_adapters = adapters;
@@ -33,12 +35,14 @@ public sealed class RunOrchestrator
 		_evidence = evidence;
 		_verdicts = verdicts;
 		_events = events;
+		_cancellation = cancellation;
 		_logger = logger;
 	}
 
 	/// <summary>
 	/// Execute the full suite for the given run.
-	/// Adapters run sequentially so the dashboard can show live per-peripheral progress.
+	/// Adapters run concurrently via Task.WhenAll so long-lived adapters (e.g. GPS streaming)
+	/// do not block short-lived ones (SDR, HaLow, Compass).
 	/// Each adapter is isolated — a failure in one never affects others (T024).
 	/// </summary>
 	public async Task ExecuteAsync(string runId, CancellationToken ct = default)
@@ -52,27 +56,33 @@ public sealed class RunOrchestrator
 
 		// Transition: Queued → Running
 		run = run with { Status = RunStatus.Running, StartedAtUtc = DateTimeOffset.UtcNow };
-		await _runs.SaveAsync(run, ct);
-		await _events.PublishRunStatusAsync(runId, RunStatus.Running, ct);
+		await _runs.SaveAsync(run, CancellationToken.None);
+		await _events.PublishRunStatusAsync(runId, RunStatus.Running, CancellationToken.None);
 
 		_logger.LogInformation("Run {RunId} started in {Mode} mode", runId, run.Mode);
 
 		using var scope = _logger.BeginScope(new Dictionary<string, object> { ["RunId"] = runId, ["RunMode"] = run.Mode.ToString() });
 
-		// Execute adapters sequentially so live command progress is visible per peripheral
+		// Execute adapters concurrently — GPS streams indefinitely until ct is cancelled;
+		// other adapters complete quickly and their evidence is available immediately.
+		var probeTasks = _adapters.Select(adapter => ProbeAdapterSafeAsync(adapter, run, ct)).ToList();
+		var results = await Task.WhenAll(probeTasks);
+
 		var evidenceList = new List<PeripheralEvidence>();
 		var statusByPeripheral = new Dictionary<PeripheralId, PeripheralStatus>();
 
-		foreach (var adapter in _adapters)
+		foreach (var (ev, status) in results)
 		{
-			var (ev, status) = await ProbeAdapterSafeAsync(adapter, run, ct);
 			evidenceList.Add(ev);
-			statusByPeripheral[adapter.PeripheralId] = status;
-			await _evidence.SaveAsync(ev, ct);
+			statusByPeripheral[ev.PeripheralId] = status;
+			await _evidence.SaveAsync(ev, CancellationToken.None);
 		}
 
+		// Unregister CTS now that all probes are done (normal completion path)
+		_cancellation.Unregister(runId);
+
 		// Auto-assign verdicts and complete the run
-		await AutoAssignVerdictsAsync(run, evidenceList, statusByPeripheral, ct);
+		await AutoAssignVerdictsAsync(run, evidenceList, statusByPeripheral, CancellationToken.None);
 
 		_logger.LogInformation("Run {RunId} completed with auto-assigned verdicts", runId);
 	}
@@ -105,13 +115,20 @@ public sealed class RunOrchestrator
 
 		await _events.PublishPeripheralStatusAsync(run.RunId, adapter.PeripheralId, envelope.Status, ct);
 
+		// Use total_fix_updates for GPS (streaming); fall back to nmea_sentence_count for legacy snapshots,
+		// then to a binary 0/1 based on Ready status for other peripherals.
+		var sampleCount = envelope.Snapshot.Values.TryGetValue("total_fix_updates", out var tfu)
+			? Convert.ToInt32(tfu)
+			: envelope.Snapshot.Values.TryGetValue("nmea_sentence_count", out var nsc)
+				? Convert.ToInt32(nsc)
+				: (envelope.Status == PeripheralStatus.Ready ? 1 : 0);
+
 		var evidence = new PeripheralEvidence
 		{
 			EvidenceId = Guid.NewGuid().ToString("N"),
 			RunId = run.RunId,
 			PeripheralId = adapter.PeripheralId,
-			SampleCount = envelope.Snapshot.Values.TryGetValue("nmea_sentence_count", out var c)
-				? Convert.ToInt32(c) : (envelope.Status == PeripheralStatus.Ready ? 1 : 0),
+			SampleCount = sampleCount,
 			LastSampleAtUtc = envelope.Status == PeripheralStatus.Ready ? envelope.CapturedAtUtc : null,
 			HealthSnapshot = envelope.Snapshot,
 			DiagnosticMessages = envelope.Messages,
