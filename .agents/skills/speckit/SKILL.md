@@ -6,7 +6,12 @@ description: >
   using the SpecKit workflow, or run any individual SpecKit step (specify, plan,
   tasks, implement, analyze, checklist, clarify, constitution). The workflow
   agents and prompts are defined in .github/agents/ and .github/prompts/.
+canonical_source: "https://github.com/Bulzi-Org/zSCOUT/blob/main/.agents/skills/speckit/SKILL.md"
 ---
+
+> **Canonical source**: This skill is maintained in the parent
+> [Bulzi-Org/zSCOUT](https://github.com/Bulzi-Org/zSCOUT/blob/main/.agents/skills/speckit/SKILL.md)
+> repository. Sub-repo copies must be kept in sync with that version.
 
 # SpecKit — Spec-Driven Development Workflow
 
@@ -93,9 +98,10 @@ every step that produces or modifies artifacts.
 
 1. **Self-assign the issue** — Assign yourself to the GitHub issue using:
    ```
-   gh issue edit $0 --add-assignee @me --repo Bulzi-Org/zSCOUT-hw-test
+   gh issue edit $0 --add-assignee @me
    ```
-   If `@me` is not available, use the bot/agent username.
+   Run this from within the checked-out repository directory so `gh` auto-detects
+   the repo. If `@me` is not available, use the bot/agent username.
 
 2. **Move to "In progress"** — Update the project board status to **In progress**
    (option ID: `47fc9ee4`) using the commands in the "How to Update the Project
@@ -161,8 +167,10 @@ every step that produces or modifies artifacts.
 
 ### Phase 5 — Verification
 
-13. **Build verification** — Run `dotnet build` (or the project's build command)
-    and fix any errors until the project compiles cleanly.
+13. **Build verification** — Identify and run the project's build command. Check
+    `README.md`, `build.sh`, `Makefile`, `package.json`, or `*.csproj` / `*.sln`
+    files to determine the right command. Fix any errors until the project builds
+    cleanly.
 
 14. **Self code review** — Review all changes for:
     - Alignment with the specification and plan
