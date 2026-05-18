@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GPS HealthSnapshot Values",
+  "description": "The 14 GPS-specific fields stored in HealthSnapshot.Values after a GPS streaming test.",
+  "type": "object",
+  "required": [
+    "gpsd_running",
+    "fix_obtained",
+    "fix_quality",
+    "satellites_used",
+    "satellites_visible",
+    "total_fix_updates"
+  ],
+  "properties": {
+    "gpsd_running": {
+      "type": "boolean",
+      "description": "True if pgrep -x gpsd returned exit code 0 at probe start."
+    },
+    "fix_obtained": {
+      "type": "boolean",
+      "description": "True if at least one qualifying GNSS fix was received during the session."
+    },
+    "fix_quality": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3,
+      "description": "Best TPV mode value seen: 0=unknown, 1=no-fix, 2=2D, 3=3D."
+    },
+    "latitude": {
+      "type": ["number", "null"],
+      "description": "Latitude in decimal degrees from the best qualifying fix. Null if no fix obtained."
+    },
+    "longitude": {
+      "type": ["number", "null"],
+      "description": "Longitude in decimal degrees from the best qualifying fix. Null if no fix obtained."
+    },
+    "altitude_m": {
+      "type": ["number", "null"],
+      "description": "Altitude above MSL in metres from the best qualifying fix. Null if no fix obtained."
+    },
+    "utc_time": {
+      "type": ["string", "null"],
+      "description": "ISO-8601 UTC timestamp from the best qualifying fix. Null if no fix obtained."
+    },
+    "satellites_used": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of satellites used in the most recent fix. 0 if no SKY data received."
+    },
+    "satellites_visible": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total number of satellites visible in the most recent SKY update. 0 if no SKY data received."
+    },
+    "hdop": {
+      "type": ["number", "null"],
+      "description": "Horizontal dilution of precision from the best qualifying fix. Null if not reported."
+    },
+    "max_snr_db": {
+      "type": ["integer", "null"],
+      "description": "Maximum satellite signal strength (dBHz) from the most recent SKY update. Null if no satellites."
+    },
+    "min_snr_db": {
+      "type": ["integer", "null"],
+      "description": "Minimum non-zero satellite signal strength (dBHz) from the most recent SKY update. Null if no satellites."
+    },
+    "speed_knots": {
+      "type": ["number", "null"],
+      "description": "Speed over ground in knots from the best qualifying fix. Null if not reported."
+    },
+    "total_fix_updates": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total number of TPV JSON lines received during the session."
+    }
+  }
+}
