@@ -19,4 +19,8 @@ public sealed class NullLiveEventPublisher : LiveEventPublisher
 	public override Task PublishTelemetrySampleAsync(
 		string runId, PeripheralId peripheralId, string sample, CancellationToken ct = default)
 		=> Task.CompletedTask;
+
+	public override Task PublishCommandProgressAsync(
+		string runId, PeripheralId peripheralId, string command, string output, bool isError, CancellationToken ct = default)
+		=> Task.CompletedTask;
 }

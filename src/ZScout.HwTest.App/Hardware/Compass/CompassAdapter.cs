@@ -25,7 +25,7 @@ public sealed class CompassAdapter : IHardwareAdapter
 		_config = config;
 	}
 
-	public async Task<DiagnosticEnvelope> ProbeAsync(RunMode mode, CancellationToken ct = default)
+	public async Task<DiagnosticEnvelope> ProbeAsync(RunMode mode, Func<string, string, bool, Task>? reportStep = null, CancellationToken ct = default)
 	{
 		var messages = new List<string>();
 
@@ -37,13 +37,19 @@ public sealed class CompassAdapter : IHardwareAdapter
 		if (!File.Exists(busPath))
 		{
 			messages.Add($"I2C bus device {busPath} not found. Is i2c enabled in /boot/config.txt?");
+			if (reportStep is not null)
+				await reportStep($"ls {busPath}", $"I2C bus {busPath} not available", true);
 			return DiagnosticEnvelope.Unavailable(PeripheralId, $"I2C bus {busPath} not available");
 		}
 		messages.Add($"I2C bus device {busPath} present");
+		if (reportStep is not null)
+			await reportStep($"ls {busPath}", $"{busPath} present", false);
 
 		// 2. Scan for QMC5883L at expected address
 		var detectResult = await ProcessHelper.RunAsync(
 			"i2cdetect", $"-y {bus}", 5_000, ct);
+		if (reportStep is not null)
+			await reportStep($"i2cdetect -y {bus}", detectResult.Stdout + detectResult.Stderr, detectResult.ExitCode != 0);
 
 		var deviceFound = detectResult.ExitCode == 0 &&
 						  detectResult.Stdout.Contains(
@@ -76,6 +82,8 @@ public sealed class CompassAdapter : IHardwareAdapter
 		// 3. Read status register (0x06) as proof of communication
 		var readResult = await ProcessHelper.RunAsync(
 			"i2cget", $"-y {bus} {ExpectedAddress} 0x06", 5_000, ct);
+		if (reportStep is not null)
+			await reportStep($"i2cget -y {bus} {ExpectedAddress} 0x06", readResult.Stdout + readResult.Stderr, readResult.ExitCode != 0);
 
 		var registerRead = readResult.ExitCode == 0 && !string.IsNullOrWhiteSpace(readResult.Stdout);
 		var registerValue = readResult.Stdout.Trim();

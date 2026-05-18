@@ -16,13 +16,21 @@ else
                          : ev?.HealthSnapshot.Values.TryGetValue("status", out var sv) == true
                            ? Enum.TryParse<PeripheralStatus>(sv?.ToString(), out var ps) ? ps : PeripheralStatus.Unknown
                            : PeripheralStatus.Unknown;
+            var isProbing = status == PeripheralStatus.Unknown && ev is null && _cmdLog.ContainsKey(pid);
 
             <div class="col-sm-6 col-lg-3">
                 <div class="card peripheral-card status-@status.ToString().ToLower()">
                     <div class="card-body py-2 px-3">
                         <div class="d-flex justify-content-between align-items-center mb-1">
                             <strong class="small">@pid</strong>
-                            <span class="badge badge-@status.ToString().ToLower()">@status</span>
+                            <span class="d-flex align-items-center gap-1">
+                                @if (isProbing)
+                                {
+                                    <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
+                                    <span class="badge bg-info">Probing…</span>
+                                }
+                                <span class="badge badge-@status.ToString().ToLower()">@status</span>
+                            </span>
                         </div>
                         @if (ev is not null)
                         {
@@ -41,6 +49,18 @@ else
                         {
                             <div class="text-muted" style="font-size:0.75rem">Awaiting probe…</div>
                         }
+                        @if (_cmdLog.TryGetValue(pid, out var entries) && entries.Count > 0)
+                        {
+                            <div class="cmd-log">
+                                @foreach (var entry in entries)
+                                {
+                                    <div class="cmd-log-entry @(entry.IsError ? "error" : "")">
+                                        <div class="cmd-label">$ @entry.Cmd</div>
+                                        <div class="cmd-output">@entry.Output</div>
+                                    </div>
+                                }
+                            </div>
+                        }
                     </div>
                 </div>
             </div>
@@ -54,10 +74,14 @@ else
     private static readonly PeripheralId[] _peripherals = Enum.GetValues<PeripheralId>();
     private List<PeripheralEvidence> _evidence = [];
     private Dictionary<PeripheralId, PeripheralStatus> _liveStatus = [];
+    private Dictionary<PeripheralId, List<(string Cmd, string Output, bool IsError, DateTimeOffset Ts)>> _cmdLog = [];
     private bool _loaded;
 
     protected override async Task OnParametersSetAsync()
     {
+        // Clear per-run state whenever RunId changes
+        _cmdLog.Clear();
+        _liveStatus.Clear();
         _evidence = (await RunSvc.GetEvidenceAsync(RunId)).ToList();
         _loaded = true;
     }
@@ -65,6 +89,7 @@ else
     protected override void OnInitialized()
     {
         LiveEvents.PeripheralStatusChanged += OnPeripheralStatusChanged;
+        LiveEvents.CommandProgressReceived += OnCommandProgress;
     }
 
     private void OnPeripheralStatusChanged(object? sender, PeripheralStatusEventArgs e)
@@ -79,5 +104,24 @@ else
         });
     }
 
-    public void Dispose() => LiveEvents.PeripheralStatusChanged -= OnPeripheralStatusChanged;
+    private void OnCommandProgress(object? sender, CommandProgressEventArgs e)
+    {
+        if (e.RunId != RunId) return;
+        _ = InvokeAsync(() =>
+        {
+            if (!_cmdLog.ContainsKey(e.PeripheralId))
+                _cmdLog[e.PeripheralId] = [];
+            var log = _cmdLog[e.PeripheralId];
+            log.Add((e.Command, e.Output, e.IsError, e.TimestampUtc));
+            if (log.Count > 100)
+                log.RemoveAt(0);
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose()
+    {
+        LiveEvents.PeripheralStatusChanged -= OnPeripheralStatusChanged;
+        LiveEvents.CommandProgressReceived -= OnCommandProgress;
+    }
 }

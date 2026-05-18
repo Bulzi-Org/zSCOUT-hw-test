@@ -22,7 +22,7 @@
     <div class="card mb-4">
         <div class="card-body">
             <h6 class="card-title">Start New Run</h6>
-            <div class="d-flex align-items-center gap-3 flex-wrap">
+                <div class="d-flex align-items-center gap-3 flex-wrap">
                 <div>
                     <label class="form-label mb-1">Mode</label>
                     <select class="form-select form-select-sm" style="width:160px"
@@ -30,6 +30,16 @@
                         <option value="@RunMode.Host">Host</option>
                         <option value="@RunMode.Container">Container</option>
                     </select>
+                    <div class="form-text text-muted mt-1">
+                        @if (_selectedMode == RunMode.Host)
+                        {
+                            <span>Runs tests directly on the host OS. Use when the app runs outside Docker.</span>
+                        }
+                        else
+                        {
+                            <span>Runs tests inside the Docker container. Verifies hardware access through /dev bind-mounts.</span>
+                        }
+                    </div>
                 </div>
                 <div class="align-self-end">
                     <button class="btn btn-success btn-sm" @onclick="StartRunAsync"
@@ -65,60 +75,35 @@ else
     <!-- Peripheral status grid -->
     <PeripheralStatusGrid RunId="@_activeRun.RunId" />
 
-    <!-- Verdict assignment (AwaitingVerdict only, Operator+) -->
-    @if (_activeRun.Status == RunStatus.AwaitingVerdict)
+    <!-- Auto-verdict results (Completed only) -->
+    @if (_activeRun.Status == RunStatus.Completed && _completedVerdicts.Count > 0)
     {
         <div class="card mt-4">
             <div class="card-body">
-                <h6 class="card-title">Assign Verdicts</h6>
-                <p class="text-muted small mb-3">
-                    Review the evidence above and assign a pass/fail outcome for each peripheral.
-                </p>
-                @foreach (var row in _verdictRows)
-                {
-                    <div class="verdict-row">
-                        <div style="width:130px">
-                            <strong>@row.PeripheralId</strong>
-                        </div>
-                        <div class="d-flex gap-3 align-items-center flex-grow-1 flex-wrap">
-                            <div class="form-check form-check-inline">
-                                <input class="form-check-input" type="radio"
-                                       name="verdict_@row.PeripheralId"
-                                       id="pass_@row.PeripheralId"
-                                       checked="@(row.Outcome == VerdictOutcome.Pass)"
-                                       @onchange="() => { row.Outcome = VerdictOutcome.Pass; row.FailureReason = null; }" />
-                                <label class="form-check-label" for="pass_@row.PeripheralId">Pass</label>
-                            </div>
-                            <div class="form-check form-check-inline">
-                                <input class="form-check-input" type="radio"
-                                       name="verdict_@row.PeripheralId"
-                                       id="fail_@row.PeripheralId"
-                                       checked="@(row.Outcome == VerdictOutcome.Fail)"
-                                       @onchange="() => row.Outcome = VerdictOutcome.Fail" />
-                                <label class="form-check-label" for="fail_@row.PeripheralId">Fail</label>
-                            </div>
-                            @if (row.Outcome == VerdictOutcome.Fail)
-                            {
-                                <input type="text" class="form-control form-control-sm"
-                                       style="max-width:300px"
-                                       placeholder="Failure reason (required)"
-                                       @bind="row.FailureReason" />
-                            }
-                            @if (row.Submitted)
-                            {
-                                <span class="badge bg-success">Saved</span>
-                            }
-                            else
-                            {
-                                <button class="btn btn-primary btn-sm"
-                                        @onclick="() => SubmitVerdictAsync(row)"
-                                        disabled="@(row.Outcome == VerdictOutcome.Fail && string.IsNullOrWhiteSpace(row.FailureReason))">
-                                    Submit
-                                </button>
-                            }
-                        </div>
-                    </div>
-                }
+                <h6 class="card-title">Results Summary</h6>
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr>
+                            <th>Peripheral</th>
+                            <th>Verdict</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var v in _completedVerdicts)
+                        {
+                            <tr>
+                                <td><strong>@v.PeripheralId</strong></td>
+                                <td>
+                                    <span class="badge @(v.Outcome == VerdictOutcome.Pass ? "bg-success" : "bg-danger")">
+                                        @v.Outcome
+                                    </span>
+                                </td>
+                                <td class="small text-muted">@(v.FailureReason ?? "—")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
             </div>
         </div>
     }
@@ -167,10 +152,10 @@ else
 @code {
     private TestRun? _activeRun;
     private List<TestRun> _recentRuns = [];
+    private List<PeripheralVerdict> _completedVerdicts = [];
     private RunMode _selectedMode = RunMode.Host;
     private bool _busy;
     private string? _errorMsg;
-    private List<VerdictRow> _verdictRows = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -182,20 +167,7 @@ else
     {
         _activeRun = await RunSvc.GetActiveRunAsync();
         _recentRuns = (await RunSvc.GetRecentRunsAsync(8)).ToList();
-
-        if (_activeRun?.Status == RunStatus.AwaitingVerdict)
-            await BuildVerdictRowsAsync();
-    }
-
-    private async Task BuildVerdictRowsAsync()
-    {
-        var existingVerdicts = await RunSvc.GetVerdictsAsync(_activeRun!.RunId);
-        var coveredIds = existingVerdicts.Select(v => v.PeripheralId).ToHashSet();
-
-        _verdictRows = Enum.GetValues<PeripheralId>()
-            .Where(pid => !coveredIds.Contains(pid))
-            .Select(pid => new VerdictRow(pid))
-            .ToList();
+        _completedVerdicts = [];
     }
 
     private async Task StartRunAsync()
@@ -225,42 +197,25 @@ else
         finally { _busy = false; }
     }
 
-    private async Task SubmitVerdictAsync(VerdictRow row)
-    {
-        var (success, err) = await RunSvc.AssignVerdictAsync(
-            _activeRun!.RunId, row.PeripheralId, row.Outcome, row.FailureReason, "dashboard");
-
-        if (success) row.Submitted = true;
-        else _errorMsg = err;
-
-        // Refresh run to detect if all verdicts in and run is now Completed
-        _activeRun = await RunSvc.GetRunAsync(_activeRun.RunId);
-        if (_activeRun?.Status == RunStatus.Completed)
-            await RefreshAsync();
-
-        StateHasChanged();
-    }
-
     private void OnRunStatusChanged(object? sender, RunStatusEventArgs e)
     {
         _ = InvokeAsync(async () =>
         {
-            _activeRun = await RunSvc.GetActiveRunAsync();
-            if (_activeRun is null)
+            if (e.Status == RunStatus.Completed)
+            {
+                // GetActiveRunAsync only returns active-state runs; fetch the
+                // completed run by ID so the results summary can be displayed.
+                _activeRun = await RunSvc.GetRunAsync(e.RunId);
+                _completedVerdicts = (await RunSvc.GetVerdictsAsync(e.RunId)).ToList();
                 _recentRuns = (await RunSvc.GetRecentRunsAsync(8)).ToList();
-            else if (_activeRun.Status == RunStatus.AwaitingVerdict)
-                await BuildVerdictRowsAsync();
+            }
+            else
+            {
+                await RefreshAsync();
+            }
             StateHasChanged();
         });
     }
 
     public void Dispose() => LiveEvents.RunStatusChanged -= OnRunStatusChanged;
-
-    private sealed class VerdictRow(PeripheralId peripheralId)
-    {
-        public PeripheralId PeripheralId { get; } = peripheralId;
-        public VerdictOutcome Outcome { get; set; } = VerdictOutcome.Pass;
-        public string? FailureReason { get; set; }
-        public bool Submitted { get; set; }
-    }
 }

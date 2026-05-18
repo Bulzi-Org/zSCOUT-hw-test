@@ -23,5 +23,6 @@ public static class HubEvents
 {
 	public const string RunStatusChanged = "RunStatusChanged";
 	public const string PeripheralStatusChanged = "PeripheralStatusChanged";
+	public const string CommandProgress = "CommandProgress";
 	public const string TelemetrySample = "TelemetrySample";
 }

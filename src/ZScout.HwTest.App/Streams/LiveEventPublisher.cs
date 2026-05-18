@@ -6,6 +6,7 @@ namespace ZScout.HwTest.App.Streams;
 
 public sealed record RunStatusEventArgs(string RunId, RunStatus Status);
 public sealed record PeripheralStatusEventArgs(string RunId, PeripheralId PeripheralId, PeripheralStatus Status);
+public sealed record CommandProgressEventArgs(string RunId, PeripheralId PeripheralId, string Command, string Output, bool IsError, DateTimeOffset TimestampUtc);
 
 /// <summary>
 /// Publishes live events to all connected SignalR clients AND raises .NET events
@@ -18,6 +19,11 @@ public class LiveEventPublisher
 	// .NET events for Blazor Server components to subscribe to
 	public event EventHandler<RunStatusEventArgs>? RunStatusChanged;
 	public event EventHandler<PeripheralStatusEventArgs>? PeripheralStatusChanged;
+	public event EventHandler<CommandProgressEventArgs>? CommandProgressReceived;
+
+	/// <summary>Raises <see cref="CommandProgressReceived"/>; callable from derived classes.</summary>
+	protected void RaiseCommandProgressReceived(CommandProgressEventArgs args)
+		=> CommandProgressReceived?.Invoke(this, args);
 
 	public LiveEventPublisher(IHubContext<HardwareStatusHub> hub)
 	{
@@ -40,6 +46,19 @@ public class LiveEventPublisher
 		await _hub.Clients.All.SendAsync(
 			HubEvents.PeripheralStatusChanged,
 			new { runId, peripheralId = peripheralId.ToString(), status = status.ToString() },
+			ct);
+	}
+
+	/// <summary>
+	/// Publishes a single command progress event for live dashboard display.
+	/// </summary>
+	public virtual async Task PublishCommandProgressAsync(
+		string runId, PeripheralId peripheralId, string command, string output, bool isError, CancellationToken ct = default)
+	{
+		CommandProgressReceived?.Invoke(this, new CommandProgressEventArgs(runId, peripheralId, command, output, isError, DateTimeOffset.UtcNow));
+		await _hub.Clients.All.SendAsync(
+			HubEvents.CommandProgress,
+			new { runId, peripheralId = peripheralId.ToString(), command, output, isError },
 			ct);
 	}
 
