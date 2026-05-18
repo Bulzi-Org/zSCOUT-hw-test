@@ -48,29 +48,31 @@ board using the `gh` CLI and GraphQL API.
 
 ### How to Update the Project Board
 
+All project board GraphQL calls require the `GH_PROJECT_TOKEN` Oz secret (a GitHub
+Classic PAT with `project`, `read:org`, and `repo` scopes). Prefix every
+`gh api graphql` project call with `GH_TOKEN=$GH_PROJECT_TOKEN` so the PAT is used
+instead of the default agent token.
+
 To move an issue to a new status, run these commands:
 
-1. Get the project item ID for the issue:
+1. Add the issue to the project and capture its item ID (idempotent — safe to run
+   even if the issue is already in the project):
    ```
-   ITEM_ID=$(gh api graphql -f query='
-     query($org: String!, $num: Int!) {
-       organization(login: $org) {
-         projectV2(number: $num) {
-           items(first: 100) {
-             nodes {
-               id
-               content { ... on Issue { number } }
-             }
-           }
-         }
+   ISSUE_NODE=$(gh api repos/Bulzi-Org/<REPO>/issues/<ISSUE_NUMBER> --jq '.node_id')
+   ITEM_ID=$(GH_TOKEN=$GH_PROJECT_TOKEN gh api graphql -f query='
+     mutation($project: ID!, $content: ID!) {
+       addProjectV2ItemById(input: { projectId: $project contentId: $content }) {
+         item { id }
        }
-     }' -f org="Bulzi-Org" -F num=1 \
-     --jq ".data.organization.projectV2.items.nodes[] | select(.content.number == <ISSUE_NUMBER>) | .id")
+     }' \
+     -f project="PVT_kwDOBuYw384BX6ma" \
+     -f content="$ISSUE_NODE" \
+     --jq '.data.addProjectV2ItemById.item.id')
    ```
 
 2. Update the status:
    ```
-   gh api graphql -f query='
+   GH_TOKEN=$GH_PROJECT_TOKEN gh api graphql -f query='
      mutation($project: ID!, $item: ID!, $field: ID!, $value: String!) {
        updateProjectV2ItemFieldValue(input: {
          projectId: $project
@@ -85,7 +87,8 @@ To move an issue to a new status, run these commands:
      -f value="<STATUS_OPTION_ID>"
    ```
 
-Replace `<ISSUE_NUMBER>` with the issue number and `<STATUS_OPTION_ID>` with the
+Replace `<REPO>` with the repository name (e.g. `zSCOUT-image-CM5`),
+`<ISSUE_NUMBER>` with the issue number, and `<STATUS_OPTION_ID>` with the
 appropriate option ID from the kanban stages above.
 
 ## Workflow Steps
