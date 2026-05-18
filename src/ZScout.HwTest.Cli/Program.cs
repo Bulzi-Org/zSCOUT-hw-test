@@ -65,6 +65,7 @@ var host = Host.CreateDefaultBuilder(args)
 
 		// Run services
 		services.AddSingleton<RunLockService>();
+		services.AddSingleton<RunCancellationService>();
 		services.AddSingleton<RunResultSerializer>();
 
 		// SignalR live events: no-op for CLI (no connected clients)
