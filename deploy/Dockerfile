@@ -11,8 +11,8 @@ COPY Directory.Build.props .
 COPY Directory.Packages.props .
 COPY src/ ./src/
 
-# Restore and publish
-RUN dotnet restore
+# Restore App project only — tests/ is not copied into the build image
+RUN dotnet restore src/ZScout.HwTest.App/ZScout.HwTest.App.csproj
 RUN dotnet publish src/ZScout.HwTest.App/ZScout.HwTest.App.csproj \
     -c Release --no-restore -o /app/publish
 
