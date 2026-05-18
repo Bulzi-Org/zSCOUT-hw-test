@@ -4,4 +4,7 @@
     <Project Path="src/ZScout.HwTest.Cli/ZScout.HwTest.Cli.csproj" />
     <Project Path="src/ZScout.HwTest.Contracts/ZScout.HwTest.Contracts.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ZScout.HwTest.App.Tests/ZScout.HwTest.App.Tests.csproj" />
+  </Folder>
 </Solution>

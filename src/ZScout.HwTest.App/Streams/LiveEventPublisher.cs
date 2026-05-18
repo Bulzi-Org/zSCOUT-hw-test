@@ -21,6 +21,10 @@ public class LiveEventPublisher
 	public event EventHandler<PeripheralStatusEventArgs>? PeripheralStatusChanged;
 	public event EventHandler<CommandProgressEventArgs>? CommandProgressReceived;
 
+	/// <summary>Raises <see cref="CommandProgressReceived"/>; callable from derived classes.</summary>
+	protected void RaiseCommandProgressReceived(CommandProgressEventArgs args)
+		=> CommandProgressReceived?.Invoke(this, args);
+
 	public LiveEventPublisher(IHubContext<HardwareStatusHub> hub)
 	{
 		_hub = hub;
