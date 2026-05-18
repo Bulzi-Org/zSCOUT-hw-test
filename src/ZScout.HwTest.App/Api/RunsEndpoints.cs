@@ -31,6 +31,7 @@ public static class RunsEndpoints
 			RunLockService lockSvc,
 			RunRepository runs,
 			RunOrchestrator orchestrator,
+			RunCancellationService cancellation,
 			LiveEventPublisher events,
 			CancellationToken ct) =>
 		{
@@ -50,10 +51,12 @@ public static class RunsEndpoints
 			await runs.SaveAsync(run, ct);
 			await events.PublishRunStatusAsync(run.RunId, run.Status, ct);
 
+			var runCt = cancellation.Register(run.RunId);
+
 			// Fire-and-forget: orchestrator runs in background, caller gets 202 immediately
 			_ = Task.Run(async () =>
 			{
-				try { await orchestrator.ExecuteAsync(run.RunId); }
+				try { await orchestrator.ExecuteAsync(run.RunId, runCt); }
 				catch { /* orchestrator logs internally */ }
 			});
 
@@ -64,6 +67,7 @@ public static class RunsEndpoints
 		group.MapDelete("/{runId}", async (
 			string runId,
 			RunRepository runs,
+			RunCancellationService cancellation,
 			LiveEventPublisher events,
 			CancellationToken ct) =>
 		{
@@ -71,6 +75,8 @@ public static class RunsEndpoints
 			if (run is null) return Results.NotFound();
 			if (run.Status is not (RunStatus.Queued or RunStatus.Running))
 				return Results.BadRequest(new { Message = "Run is not active." });
+
+			cancellation.Cancel(runId);
 
 			var updated = run with { Status = RunStatus.Stopped, FinishedAtUtc = DateTimeOffset.UtcNow };
 			await runs.SaveAsync(updated, ct);

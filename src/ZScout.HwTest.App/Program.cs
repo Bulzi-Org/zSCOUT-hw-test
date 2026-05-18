@@ -35,6 +35,7 @@ builder.Services.AddSingleton<TelemetryStreamWriter>();
 
 // ── Run Services ─────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<RunLockService>();
+builder.Services.AddSingleton<RunCancellationService>();
 builder.Services.AddSingleton<RunResultSerializer>();
 builder.Services.AddSingleton<RunConfigurationService>();
 
