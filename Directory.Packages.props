@@ -1,23 +1,31 @@
 <Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
   <!-- Centralized package version management -->
   <ItemGroup>
     <!-- ASP.NET Core / Blazor -->
-    <PackageReference Update="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
-    <PackageReference Update="Microsoft.AspNetCore.SignalR" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.SignalR" Version="10.0.0" />
     
     <!-- Logging & Diagnostics -->
-    <PackageReference Update="Microsoft.Extensions.Logging.Console" Version="10.0.0" />
-    <PackageReference Update="Serilog" Version="4.2.0" />
-    <PackageReference Update="Serilog.Extensions.Logging" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.0" />
+    <PackageVersion Include="Serilog" Version="4.2.0" />
+    <PackageVersion Include="Serilog.Extensions.Logging" Version="8.0.0" />
     
     <!-- Testing -->
-    <PackageReference Update="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
-    <PackageReference Update="Microsoft.Extensions.Configuration" Version="10.0.0" />
-    <PackageReference Update="xunit" Version="2.9.1" />
-    <PackageReference Update="xunit.runner.visualstudio" Version="3.0.0" />
-    <PackageReference Update="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.0" />
+    <PackageVersion Include="xunit" Version="2.9.1" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.0.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     
     <!-- JSON / Serialization -->
-    <PackageReference Update="System.Text.Json" Version="10.0.0" />
+    <PackageVersion Include="System.Text.Json" Version="10.0.0" />
+
+    <!-- gRPC -->
+    <PackageVersion Include="Grpc.Net.Client" Version="2.71.0" />
+    <PackageVersion Include="Google.Protobuf" Version="3.30.2" />
+    <PackageVersion Include="Grpc.Tools" Version="2.71.0" />
   </ItemGroup>
 </Project>
