@@ -87,6 +87,44 @@ To move an issue to a new status, run these commands:
      -f value="<STATUS_OPTION_ID>"
    ```
 
+3. Verify the update (required — the GitHub Projects API can silently drop
+   mutations). Query the current status and retry up to 2 times if it did not
+   take effect:
+   ```
+   EXPECTED="<STATUS_OPTION_ID>"
+   for ATTEMPT in 1 2 3; do
+     CURRENT=$(GH_TOKEN=$GH_PROJECT_TOKEN gh api graphql -f query='
+       query($id: ID!) {
+         node(id: $id) {
+           ... on ProjectV2Item {
+             fieldValueByName(name: "Status") {
+               ... on ProjectV2ItemFieldSingleSelectValue { optionId }
+             }
+           }
+         }
+       }' -f id="$ITEM_ID" --jq '.data.node.fieldValueByName.optionId')
+     if [ "$CURRENT" = "$EXPECTED" ]; then
+       echo "[project-board] Status verified on attempt $ATTEMPT"
+       break
+     fi
+     echo "[project-board] Status mismatch (got=$CURRENT, want=$EXPECTED), retrying ($ATTEMPT/3)..."
+     sleep 2
+     GH_TOKEN=$GH_PROJECT_TOKEN gh api graphql -f query='
+       mutation($project: ID!, $item: ID!, $field: ID!, $value: String!) {
+         updateProjectV2ItemFieldValue(input: {
+           projectId: $project
+           itemId: $item
+           fieldId: $field
+           value: { singleSelectOptionId: $value }
+         }) { projectV2Item { id } }
+       }' \
+       -f project="PVT_kwDOBuYw384BX6ma" \
+       -f item="$ITEM_ID" \
+       -f field="PVTSSF_lADOBuYw384BX6mazhTEHqU" \
+       -f value="$EXPECTED"
+   done
+   ```
+
 Replace `<REPO>` with the repository name (e.g. `zSCOUT-image-CM5`),
 `<ISSUE_NUMBER>` with the issue number, and `<STATUS_OPTION_ID>` with the
 appropriate option ID from the kanban stages above.
