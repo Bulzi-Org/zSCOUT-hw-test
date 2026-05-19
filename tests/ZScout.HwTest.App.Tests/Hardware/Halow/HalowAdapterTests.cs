@@ -1,0 +1,218 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+using ZScout.HwTest.App.Hardware.Halow;
+using ZScout.HwTest.Contracts.Models;
+
+namespace ZScout.HwTest.App.Tests.Hardware.Halow;
+
+/// <summary>
+/// Tests for the HalowAdapter Layer 0-3 diagnostic pipeline.
+/// These tests run without MM8108 hardware — they verify the adapter
+/// handles absent hardware gracefully and returns correct status/envelope shapes.
+/// </summary>
+public sealed class HalowAdapterTests
+{
+	private static HalowAdapter CreateAdapter() =>
+		new(NullLogger<HalowAdapter>.Instance);
+
+	// ── ProbeAsync tests ────────────────────────────────────────────────
+
+	/// <summary>
+	/// Without the MM8108 USB device, Layer 0 should fail and ProbeAsync
+	/// should return Unavailable immediately without attempting Layers 1-3.
+	/// </summary>
+	[Fact]
+	public async Task ProbeAsync_WhenUsbDeviceAbsent_ReturnsUnavailable()
+	{
+		var adapter = CreateAdapter();
+
+		var result = await adapter.ProbeAsync(RunMode.Container);
+
+		Assert.Equal(PeripheralStatus.Unavailable, result.Status);
+		Assert.False(result.DependencyAvailable);
+		Assert.Equal(PeripheralId.Halow, result.PeripheralId);
+		Assert.Contains(result.Messages, m => m.Contains("MM8108 USB device not detected"));
+	}
+
+	/// <summary>
+	/// The snapshot must contain all 9 required keys even when layers fail early.
+	/// </summary>
+	[Fact]
+	public async Task ProbeAsync_SnapshotContainsAllRequiredKeys()
+	{
+		var adapter = CreateAdapter();
+
+		var result = await adapter.ProbeAsync(RunMode.Container);
+
+		var keys = result.Snapshot.Values.Keys;
+		Assert.Contains("usb_device_found", keys);
+		Assert.Contains("vendor_id", keys);
+		Assert.Contains("module_loaded", keys);
+		Assert.Contains("firmware_loaded", keys);
+		Assert.Contains("firmware_version", keys);
+		Assert.Contains("interface_name", keys);
+		Assert.Contains("phy_name", keys);
+		Assert.Contains("supported_channels", keys);
+		Assert.Contains("health_check_ok", keys);
+	}
+
+	/// <summary>
+	/// When USB is absent, usb_device_found must be false and vendor_id null.
+	/// </summary>
+	[Fact]
+	public async Task ProbeAsync_WhenUsbAbsent_SnapshotHasCorrectUsbValues()
+	{
+		var adapter = CreateAdapter();
+
+		var result = await adapter.ProbeAsync(RunMode.Container);
+
+		Assert.Equal(false, result.Snapshot.Values["usb_device_found"]);
+		Assert.Null(result.Snapshot.Values["vendor_id"]);
+	}
+
+	/// <summary>
+	/// ReportStep must be called at least once (for the USB check command)
+	/// even when the probe fails at Layer 0.
+	/// </summary>
+	[Fact]
+	public async Task ProbeAsync_WithReportStep_CallsReportStepForLayer0()
+	{
+		var adapter = CreateAdapter();
+		var calls = new List<(string Cmd, bool IsError)>();
+
+		Task ReportStep(string cmd, string output, bool isError)
+		{
+			calls.Add((cmd, isError));
+			return Task.CompletedTask;
+		}
+
+		await adapter.ProbeAsync(RunMode.Container, ReportStep);
+
+		Assert.NotEmpty(calls);
+		// The first call should be for the USB sysfs grep
+		Assert.Contains(calls, c => c.Cmd.Contains("idVendor"));
+	}
+
+	/// <summary>
+	/// ProbeAsync must not throw when reportStep is null (backward compat).
+	/// </summary>
+	[Fact]
+	public async Task ProbeAsync_WithNullReportStep_DoesNotThrow()
+	{
+		var adapter = CreateAdapter();
+
+		var result = await adapter.ProbeAsync(RunMode.Host, reportStep: null);
+
+		Assert.NotNull(result);
+		Assert.Equal(PeripheralId.Halow, result.PeripheralId);
+	}
+
+	/// <summary>
+	/// ProbeAsync must work with both RunMode.Container and RunMode.Host.
+	/// </summary>
+	[Fact]
+	public async Task ProbeAsync_HostMode_ReturnsValidEnvelope()
+	{
+		var adapter = CreateAdapter();
+
+		var result = await adapter.ProbeAsync(RunMode.Host);
+
+		Assert.NotNull(result);
+		Assert.NotNull(result.Snapshot);
+		Assert.NotEmpty(result.Messages);
+	}
+
+	// ── ReadRawSampleAsync tests ────────────────────────────────────────
+
+	/// <summary>
+	/// Without a cached interface (no prior probe), ReadRawSampleAsync
+	/// should attempt discovery and return null if no interface found.
+	/// </summary>
+	[Fact]
+	public async Task ReadRawSampleAsync_WhenNoInterfaceCached_ReturnsNull()
+	{
+		var adapter = CreateAdapter();
+
+		var result = await adapter.ReadRawSampleAsync();
+
+		// Without real hardware, iw won't find any interface
+		Assert.Null(result);
+	}
+
+	// ── Parser unit tests ───────────────────────────────────────────────
+
+	[Fact]
+	public void ParseInterfaceName_WithValidIwDevOutput_ReturnsInterfaceName()
+	{
+		const string iwDevOutput = """
+			phy#0
+				Interface wlan0
+					ifindex 3
+					wdev 0x1
+					addr 00:11:22:33:44:55
+					type managed
+			""";
+
+		var result = HalowAdapter.ParseInterfaceName(iwDevOutput);
+		Assert.Equal("wlan0", result);
+	}
+
+	[Fact]
+	public void ParseInterfaceName_WithEmptyOutput_ReturnsNull()
+	{
+		Assert.Null(HalowAdapter.ParseInterfaceName(""));
+	}
+
+	[Fact]
+	public void ParseInterfaceName_WithNoInterfaceLine_ReturnsNull()
+	{
+		const string output = "phy#0\n\tifindex 3\n";
+		Assert.Null(HalowAdapter.ParseInterfaceName(output));
+	}
+
+	[Fact]
+	public void ParsePhyName_WithValidIwPhyOutput_ReturnsPhyName()
+	{
+		const string iwPhyOutput = """
+			Wiphy phy0
+				max # scan SSIDs: 4
+				max scan IEs length: 2257 bytes
+			""";
+
+		var result = HalowAdapter.ParsePhyName(iwPhyOutput);
+		Assert.Equal("phy0", result);
+	}
+
+	[Fact]
+	public void ParsePhyName_WithEmptyOutput_ReturnsNull()
+	{
+		Assert.Null(HalowAdapter.ParsePhyName(""));
+	}
+
+	[Fact]
+	public void ParseSupportedChannels_WithFrequencies_ReturnsCommaSeparatedList()
+	{
+		const string iwPhyOutput = """
+			Frequencies:
+				* 902 MHz [1] (30.0 dBm)
+				* 904 MHz [2] (30.0 dBm)
+				* 906 MHz [3] (30.0 dBm)
+			""";
+
+		var result = HalowAdapter.ParseSupportedChannels(iwPhyOutput);
+		Assert.Equal("902, 904, 906", result);
+	}
+
+	[Fact]
+	public void ParseSupportedChannels_WithNoFrequencies_ReturnsNull()
+	{
+		Assert.Null(HalowAdapter.ParseSupportedChannels("some other output"));
+	}
+
+	[Fact]
+	public void ParseSupportedChannels_WithEmptyOutput_ReturnsNull()
+	{
+		Assert.Null(HalowAdapter.ParseSupportedChannels(""));
+	}
+}
