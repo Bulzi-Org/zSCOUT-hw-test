@@ -1,21 +1,28 @@
 using System.Text.RegularExpressions;
+using Grpc.Net.Client;
 using ZScout.HwTest.App.Hardware.Common;
+using ZScout.HwTest.App.Protos;
 using ZScout.HwTest.Contracts.Models;
 
 namespace ZScout.HwTest.App.Hardware.Halow;
 
 /// <summary>
 /// HaLow adapter: probes the Morse Micro MM8108 Wi-Fi HaLow radio through a
-/// sequential 4-layer diagnostic pipeline (T020).
+/// two-tier diagnostic strategy (FR-008).
+/// <para>Tier A — Hardware Health (Layers 0-3, always runs, no mesh required):</para>
 /// <list type="bullet">
 ///   <item><description>Layer 0 — USB device enumeration (vendor ID 0x325B)</description></item>
 ///   <item><description>Layer 1 — Kernel module load + firmware verification</description></item>
 ///   <item><description>Layer 2 — Wireless interface via <c>iw dev</c> / <c>iw phy</c></description></item>
 ///   <item><description>Layer 3 — Optional <c>morse_cli</c> radio health check</description></item>
 /// </list>
-/// The probe stops at the first failing layer and returns the appropriate
-/// <see cref="PeripheralStatus"/> (T024).
-/// Container mode: requires host networking + privileged to access /sys.
+/// <para>Tier B — Mesh Connectivity (Layer 4+, requires zSCOUT-mesh gRPC :5102):</para>
+/// <list type="bullet">
+///   <item><description>Mesh association, peer count, gateway mode via gRPC</description></item>
+///   <item><description>Internet reachability through bat0 interface</description></item>
+/// </list>
+/// Tier A requires only read-only /sys and --network host (no --privileged).
+/// Tier B is attempted only when Tier A passes and mesh service is reachable (FR-011).
 /// </summary>
 public sealed partial class HalowAdapter : IHardwareAdapter
 {
@@ -28,6 +35,7 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 	public PeripheralId PeripheralId => PeripheralId.Halow;
 
 	private readonly ILogger<HalowAdapter> _logger;
+	private readonly IConfiguration _config;
 
 	/// <summary>
 	/// Caches the most recently discovered HaLow wireless interface name
@@ -35,9 +43,10 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 	/// </summary>
 	private volatile string? _lastDiscoveredInterface;
 
-	public HalowAdapter(ILogger<HalowAdapter> logger)
+	public HalowAdapter(ILogger<HalowAdapter> logger, IConfiguration config)
 	{
 		_logger = logger;
+		_config = config;
 	}
 
 	/// <inheritdoc />
@@ -81,7 +90,11 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		// ── Layer 3 — Radio health check ──────────────────────────────────
 		await ProbeRadioHealthAsync(ifaceName, messages, snapshot, reportStep, ct);
 
-		_logger.LogInformation("HaLow probe: all layers passed for interface {Interface}", ifaceName);
+		_logger.LogInformation("HaLow probe: Tier A passed for interface {Interface}", ifaceName);
+
+		// ── Tier B — Mesh Connectivity (FR-008, FR-010, FR-011) ─────────
+		await ProbeMeshAsync(messages, snapshot, reportStep, ct);
+
 		return BuildEnvelope(PeripheralStatus.Ready, true, messages, snapshot);
 	}
 
@@ -313,6 +326,78 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		messages.Add("Layer 3 PASS: radio health check complete");
 	}
 
+	/// <summary>
+	/// Tier B: Attempt gRPC connection to zSCOUT-mesh service for mesh health data.
+	/// If mesh service is unavailable, reports NotTested without failure (FR-011).
+	/// </summary>
+	private async Task ProbeMeshAsync(
+		List<string> messages,
+		Dictionary<string, object?> snapshot,
+		Func<string, string, bool, Task>? reportStep,
+		CancellationToken ct)
+	{
+		var host = _config["Peripherals:Halow:MeshHost"] ?? "localhost";
+		var port = int.TryParse(_config["Peripherals:Halow:MeshPort"], out var p) ? p : 5102;
+		var timeoutMs = int.TryParse(_config["Peripherals:Halow:MeshTimeoutMs"], out var t) ? t : 5_000;
+
+		// Check if mesh service is reachable
+		var reachable = await TcpHealthCheck.CheckAsync(host, port, timeoutMs, ct);
+		if (reportStep is not null)
+			await reportStep($"TCP connect {host}:{port}", reachable ? "mesh service connected" : "mesh service unreachable", !reachable);
+
+		snapshot["mesh_service_available"] = reachable;
+
+		if (!reachable)
+		{
+			// Mesh not available — report NotTested, not a failure (FR-011)
+			snapshot["mesh_associated"] = null;
+			snapshot["peer_count"] = null;
+			snapshot["gateway_mode"] = null;
+			snapshot["bat0_ip"] = null;
+			snapshot["internet_reachable"] = null;
+			messages.Add($"Tier B: mesh service not available on {host}:{port} — mesh tests skipped (NotTested)");
+			_logger.LogInformation("HaLow probe: mesh service not available on {Host}:{Port} — Tier B skipped", host, port);
+			return;
+		}
+
+		// Query mesh service via gRPC
+		using var channel = GrpcChannelFactory.Create(host, port);
+		var client = new MeshService.MeshServiceClient(channel);
+
+		try
+		{
+			using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+			statusCts.CancelAfter(timeoutMs);
+			var meshStatus = await client.GetStatusAsync(new MeshStatusRequest(), cancellationToken: statusCts.Token);
+			if (reportStep is not null)
+				await reportStep("MeshService.GetStatus",
+					$"associated={meshStatus.Associated} peers={meshStatus.PeerCount} gw={meshStatus.GatewayMode} inet={meshStatus.InternetReachable}",
+					!meshStatus.Associated);
+
+			snapshot["mesh_associated"] = meshStatus.Associated;
+			snapshot["peer_count"] = meshStatus.PeerCount;
+			snapshot["gateway_mode"] = meshStatus.GatewayMode;
+			snapshot["bat0_ip"] = meshStatus.Bat0Ip;
+			snapshot["internet_reachable"] = meshStatus.InternetReachable;
+
+			var tierBSummary = meshStatus.Associated
+				? $"Tier B PASS: mesh associated, {meshStatus.PeerCount} peers, gw={meshStatus.GatewayMode}, bat0={meshStatus.Bat0Ip}, inet={meshStatus.InternetReachable}"
+				: $"Tier B: mesh not associated — {meshStatus.StatusMessage}";
+			messages.Add(tierBSummary);
+			_logger.LogInformation("HaLow Tier B: associated={Associated} peers={PeerCount}", meshStatus.Associated, meshStatus.PeerCount);
+		}
+		catch (Exception ex) when (ex is not OperationCanceledException)
+		{
+			_logger.LogWarning(ex, "HaLow probe: gRPC call to mesh service failed");
+			snapshot["mesh_associated"] = null;
+			snapshot["peer_count"] = null;
+			snapshot["gateway_mode"] = null;
+			snapshot["bat0_ip"] = null;
+			snapshot["internet_reachable"] = null;
+			messages.Add($"Tier B: gRPC error — {ex.GetType().Name}: {ex.Message}");
+		}
+	}
+
 	// ── Helpers ──────────────────────────────────────────────────────────
 
 	/// <summary>
@@ -390,9 +475,10 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		return frequencies.Count > 0 ? string.Join(", ", frequencies) : null;
 	}
 
-	/// <summary>All keys required in HealthSnapshot.Values per FR-008.</summary>
+	/// <summary>All keys required in HealthSnapshot.Values per FR-008/FR-009/FR-010.</summary>
 	private static readonly string[] RequiredSnapshotKeys =
 	[
+		// Tier A (FR-009)
 		"usb_device_found",
 		"vendor_id",
 		"module_loaded",
@@ -401,7 +487,14 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		"interface_name",
 		"phy_name",
 		"supported_channels",
-		"health_check_ok"
+		"health_check_ok",
+		// Tier B (FR-010)
+		"mesh_service_available",
+		"mesh_associated",
+		"peer_count",
+		"gateway_mode",
+		"bat0_ip",
+		"internet_reachable"
 	];
 
 	[GeneratedRegex(@"firmware version[:\s]+(\S+)", RegexOptions.IgnoreCase)]

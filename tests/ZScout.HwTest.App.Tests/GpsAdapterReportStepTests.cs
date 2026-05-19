@@ -10,15 +10,11 @@ namespace ZScout.HwTest.App.Tests;
 public sealed class GpsAdapterReportStepTests
 {
 	/// <summary>
-	/// Regression test for the duplicate reportStep bug.
-	/// Before the fix, when gpsd was not running, reportStep was called twice
-	/// for "pgrep -x gpsd" — once with the actual process output, and once
-	/// with a hardcoded message inside the early-return block.
-	/// After the fix the early-return block has no reportStep call, so
-	/// "pgrep -x gpsd" appears exactly once in the log.
+	/// When gps-svc is not reachable, the adapter returns Unavailable
+	/// and reports the TCP connect attempt exactly once via reportStep.
 	/// </summary>
 	[Fact]
-	public async Task ProbeAsync_WhenGpsdNotRunning_PgrepReportedExactlyOnce()
+	public async Task ProbeAsync_WhenGpsSvcNotReachable_TcpCheckReportedExactlyOnce()
 	{
 		ILogger<GpsAdapter> logger = NullLogger<GpsAdapter>.Instance;
 		var config = new ConfigurationBuilder().Build();
@@ -33,14 +29,14 @@ public sealed class GpsAdapterReportStepTests
 
 		var result = await adapter.ProbeAsync(RunMode.Container, ReportStep);
 
-		// On any machine without gpsd, the adapter must return Unavailable
-		// and reportStep must have been called exactly once for pgrep.
+		// Without gps-svc running, the adapter must return Unavailable
+		// and reportStep must have been called exactly once for the TCP check.
 		Assert.Equal(PeripheralStatus.Unavailable, result.Status);
 		Assert.False(result.DependencyAvailable);
 
-		var pgrepCalls = calls.Where(c => c.Cmd == "pgrep -x gpsd").ToList();
-		Assert.Single(pgrepCalls); // was 2 before the fix
-		Assert.True(pgrepCalls[0].IsError);
+		var tcpCalls = calls.Where(c => c.Cmd.StartsWith("TCP connect")).ToList();
+		Assert.Single(tcpCalls);
+		Assert.True(tcpCalls[0].IsError);
 	}
 
 	[Fact]

@@ -4,12 +4,14 @@ using ZScout.HwTest.Contracts.Models;
 namespace ZScout.HwTest.App.Hardware.Gps;
 
 /// <summary>
-/// GPS adapter: probes the MicoAir MG-A01 via gpsd.
+/// GPS adapter: probes the MicoAir MG-A01 via gps-svc TCP connection.
+/// Connects to gps-svc on configurable host:port (default localhost:2947) instead of
+/// checking for a host gpsd process (which fails in container PID namespaces — #23 Bug 1).
 /// Streams live GNSS fix data from <c>gpspipe -w</c> (JSON mode) until the run is stopped
 /// or the CancellationToken is cancelled. Returns PASS (Ready) if a complete fix was obtained,
-/// FAIL (Degraded) if gpsd ran but no qualifying fix arrived, or Unavailable if gpsd is absent.
+/// FAIL (Degraded) if gps-svc ran but no qualifying fix arrived, or Unavailable if gps-svc is absent.
 /// T016: Streaming probe with fix-based verdict and 14-field HealthSnapshot.
-/// T024: Unavailable returned immediately when gpsd is not running; other adapters not blocked.
+/// T024: Unavailable returned immediately when gps-svc is not reachable; other adapters not blocked.
 /// </summary>
 public sealed class GpsAdapter : IHardwareAdapter
 {
@@ -28,6 +30,7 @@ public sealed class GpsAdapter : IHardwareAdapter
 	/// Streams live GNSS fix data until <paramref name="ct"/> is cancelled (operator Stop)
 	/// or the gpspipe process exits. Each parsed fix update is published via
 	/// <paramref name="reportStep"/> for live dashboard display.
+	/// Connects to gps-svc via TCP (FR-001, FR-002) instead of host process check.
 	/// </summary>
 	public async Task<DiagnosticEnvelope> ProbeAsync(
 		RunMode mode,
@@ -36,29 +39,35 @@ public sealed class GpsAdapter : IHardwareAdapter
 	{
 		var messages = new List<string>();
 
-		// Step 1: Check gpsd is running (T024: return Unavailable immediately if not)
-		var psResult = await ProcessHelper.RunAsync("pgrep", "-x gpsd", 5_000, ct);
-		var gpsdRunning = psResult.ExitCode == 0;
-		if (reportStep is not null)
-			await reportStep("pgrep -x gpsd", psResult.Stdout + psResult.Stderr, psResult.ExitCode != 0);
+		// Resolve gps-svc endpoint from configuration (FR-001, FR-013)
+		var host = _config["Peripherals:Gps:Host"] ?? "localhost";
+		var port = int.TryParse(_config["Peripherals:Gps:Port"], out var p) ? p : 2947;
+		var timeoutMs = int.TryParse(_config["Peripherals:Gps:TimeoutMs"], out var t) ? t : 5_000;
 
-		if (!gpsdRunning)
+		// Step 1: TCP connectivity check to gps-svc (FR-002, fixes #23 Bug 1)
+		var reachable = await TcpHealthCheck.CheckAsync(host, port, timeoutMs, ct);
+		if (reportStep is not null)
+			await reportStep($"TCP connect {host}:{port}", reachable ? "connected" : "unreachable", !reachable);
+
+		if (!reachable)
 		{
-			_logger.LogWarning("GPS probe: gpsd not running");
-			return DiagnosticEnvelope.Unavailable(PeripheralId, "gpsd service not running");
+			_logger.LogWarning("GPS probe: gps-svc not reachable on {Host}:{Port}", host, port);
+			return DiagnosticEnvelope.Unavailable(PeripheralId, $"gps-svc not reachable on {host}:{port}");
 		}
 
-		messages.Add("gpsd process found; starting live GNSS fix stream");
-		_logger.LogInformation("GPS probe: gpsd running; starting gpspipe -w stream");
+		messages.Add($"gps-svc reachable on {host}:{port}; starting live GNSS fix stream");
+		_logger.LogInformation("GPS probe: gps-svc reachable on {Host}:{Port}; starting gpspipe -w stream", host, port);
 
-		// Step 2: Stream gpspipe -w JSON output until ct is cancelled
+		// Step 2: Stream gpspipe -w JSON output until ct is cancelled (FR-003)
+		// Connect gpspipe to gps-svc host explicitly
 		var accumulator = new GpsFixAccumulator();
 		string? streamStderr = null;
+		var gpspipeArgs = host == "localhost" ? "-w" : $"-w -l {host}";
 
 		try
 		{
 			streamStderr = await ProcessHelper.StreamLinesAsync(
-				"gpspipe", "-w",
+				"gpspipe", gpspipeArgs,
 				async (line, lineCt) =>
 				{
 					var fix = GnssJsonParser.Parse(line);
@@ -102,12 +111,12 @@ public sealed class GpsAdapter : IHardwareAdapter
 		}
 
 		// Step 4: Build 14-field HealthSnapshot (T016)
-		var snapshotValues = accumulator.BuildSnapshot(gpsdRunning);
+		var snapshotValues = accumulator.BuildSnapshot(reachable);
 
 		return new DiagnosticEnvelope
 		{
 			PeripheralId = PeripheralId,
-			DependencyAvailable = gpsdRunning,
+			DependencyAvailable = reachable,
 			Status = status,
 			Messages = messages,
 			Snapshot = new HealthSnapshot { Values = snapshotValues },

@@ -1,20 +1,20 @@
+using Grpc.Net.Client;
 using ZScout.HwTest.App.Hardware.Common;
+using ZScout.HwTest.App.Protos;
 using ZScout.HwTest.Contracts.Models;
 
 namespace ZScout.HwTest.App.Hardware.Compass;
 
 /// <summary>
-/// Compass adapter: probes the QMC5883L magnetometer via I2C.
-/// Uses i2cdetect to confirm device presence at the expected I2C address (0x0d).
-/// Uses i2cget to read one bearing register as proof of communication.
-/// Container mode: requires /dev/i2c-* device pass-through.
+/// Compass adapter: probes the QMC5883L magnetometer via compass-svc gRPC (FR-004).
+/// Connects to compass-svc on configurable host:port (default localhost:5100) instead
+/// of directly accessing the I2C bus. Eliminates the need for /dev/i2c-* device
+/// pass-through and --privileged mode.
+/// T017: Heading, XYZ, temperature, overflow data via gRPC.
 /// </summary>
 public sealed class CompassAdapter : IHardwareAdapter
 {
 	public PeripheralId PeripheralId => PeripheralId.Compass;
-
-	// QMC5883L default I2C address
-	private const string ExpectedAddress = "0x0d";
 
 	private readonly ILogger<CompassAdapter> _logger;
 	private readonly IConfiguration _config;
@@ -25,99 +25,152 @@ public sealed class CompassAdapter : IHardwareAdapter
 		_config = config;
 	}
 
+	/// <summary>
+	/// Probes the compass via compass-svc gRPC API (FR-004, FR-005).
+	/// Returns Ready with heading data on success, Unavailable if service is not reachable.
+	/// </summary>
 	public async Task<DiagnosticEnvelope> ProbeAsync(RunMode mode, Func<string, string, bool, Task>? reportStep = null, CancellationToken ct = default)
 	{
 		var messages = new List<string>();
 
-		// Determine I2C bus (default i2c-1 on CM5, configurable via appsettings)
-		var bus = _config["Peripherals:Compass:I2cBus"] ?? "1";
-		var busPath = $"/dev/i2c-{bus}";
+		// Resolve compass-svc endpoint from configuration (FR-004, FR-013)
+		var host = _config["Peripherals:Compass:Host"] ?? "localhost";
+		var port = int.TryParse(_config["Peripherals:Compass:Port"], out var p) ? p : 5100;
+		var timeoutMs = int.TryParse(_config["Peripherals:Compass:TimeoutMs"], out var t) ? t : 5_000;
 
-		// 1. Verify i2c bus device exists
-		if (!File.Exists(busPath))
+		// 1. Check gRPC service reachability via TCP (FR-018)
+		var reachable = await TcpHealthCheck.CheckAsync(host, port, timeoutMs, ct);
+		if (reportStep is not null)
+			await reportStep($"TCP connect {host}:{port}", reachable ? "connected" : "unreachable", !reachable);
+
+		if (!reachable)
 		{
-			messages.Add($"I2C bus device {busPath} not found. Is i2c enabled in /boot/config.txt?");
-			if (reportStep is not null)
-				await reportStep($"ls {busPath}", $"I2C bus {busPath} not available", true);
-			return DiagnosticEnvelope.Unavailable(PeripheralId, $"I2C bus {busPath} not available");
+			_logger.LogWarning("Compass probe: compass-svc not reachable on {Host}:{Port}", host, port);
+			return DiagnosticEnvelope.Unavailable(PeripheralId, $"compass-svc not reachable on {host}:{port}");
 		}
-		messages.Add($"I2C bus device {busPath} present");
-		if (reportStep is not null)
-			await reportStep($"ls {busPath}", $"{busPath} present", false);
 
-		// 2. Scan for QMC5883L at expected address
-		var detectResult = await ProcessHelper.RunAsync(
-			"i2cdetect", $"-y {bus}", 5_000, ct);
-		if (reportStep is not null)
-			await reportStep($"i2cdetect -y {bus}", detectResult.Stdout + detectResult.Stderr, detectResult.ExitCode != 0);
+		messages.Add($"compass-svc reachable on {host}:{port}");
+		_logger.LogInformation("Compass probe: compass-svc reachable on {Host}:{Port}", host, port);
 
-		var deviceFound = detectResult.ExitCode == 0 &&
-						  detectResult.Stdout.Contains(
-							  ExpectedAddress.Replace("0x", "").TrimStart('0'),
-							  StringComparison.OrdinalIgnoreCase);
+		// 2. Query compass-svc via gRPC
+		using var channel = GrpcChannelFactory.Create(host, port);
+		var client = new CompassService.CompassServiceClient(channel);
 
-		messages.Add(deviceFound
-			? $"QMC5883L detected at I2C address {ExpectedAddress} on bus {bus}"
-			: $"QMC5883L not found at {ExpectedAddress} on i2c-{bus}");
+		try
+		{
+			// Check device status
+			using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+			statusCts.CancelAfter(timeoutMs);
+			var status = await client.GetStatusAsync(new CompassStatusRequest(), cancellationToken: statusCts.Token);
+			if (reportStep is not null)
+				await reportStep("CompassService.GetStatus", $"available={status.Available} addr={status.DeviceAddress} bus={status.Bus}", !status.Available);
 
-		if (!deviceFound)
+			if (!status.Available)
+			{
+				messages.Add($"compass-svc reports device unavailable: {status.StatusMessage}");
+				return new DiagnosticEnvelope
+				{
+					PeripheralId = PeripheralId,
+					DependencyAvailable = true,
+					Status = PeripheralStatus.Unavailable,
+					Messages = messages,
+					Snapshot = new HealthSnapshot
+					{
+						Values = new Dictionary<string, object?>
+						{
+							["service_available"] = true,
+							["device_available"] = false,
+							["status_message"] = status.StatusMessage
+						}
+					},
+					CapturedAtUtc = DateTimeOffset.UtcNow
+				};
+			}
+
+			messages.Add($"Device available at {status.DeviceAddress} on bus {status.Bus}");
+
+			// Get heading data (FR-005)
+			using var headingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+			headingCts.CancelAfter(timeoutMs);
+			var heading = await client.GetHeadingAsync(new CompassHeadingRequest(), cancellationToken: headingCts.Token);
+			if (reportStep is not null)
+				await reportStep("CompassService.GetHeading", $"heading={heading.HeadingDegrees:F1}° x={heading.X:F2} y={heading.Y:F2} z={heading.Z:F2}", false);
+
+			var hasNonZeroData = heading.X != 0 || heading.Y != 0 || heading.Z != 0;
+			var finalStatus = hasNonZeroData ? PeripheralStatus.Ready : PeripheralStatus.Degraded;
+
+			messages.Add(hasNonZeroData
+				? $"Compass PASS: heading={heading.HeadingDegrees:F1}° XYZ=({heading.X:F2},{heading.Y:F2},{heading.Z:F2}) temp={heading.TemperatureC:F1}°C"
+				: "Compass FAIL: all magnetometer axes report zero — sensor may be malfunctioning");
+
 			return new DiagnosticEnvelope
 			{
 				PeripheralId = PeripheralId,
 				DependencyAvailable = true,
-				Status = PeripheralStatus.Unavailable,
+				Status = finalStatus,
 				Messages = messages,
 				Snapshot = new HealthSnapshot
 				{
 					Values = new Dictionary<string, object?>
 					{
-						["bus"] = bus,
-						["expected_address"] = ExpectedAddress,
-						["device_found"] = false
+						["service_available"] = true,
+						["device_available"] = true,
+						["device_address"] = status.DeviceAddress,
+						["bus"] = status.Bus,
+						["heading_degrees"] = heading.HeadingDegrees,
+						["x"] = heading.X,
+						["y"] = heading.Y,
+						["z"] = heading.Z,
+						["temperature_c"] = heading.TemperatureC,
+						["overflow"] = heading.Overflow
 					}
 				},
 				CapturedAtUtc = DateTimeOffset.UtcNow
 			};
-
-		// 3. Read status register (0x06) as proof of communication
-		var readResult = await ProcessHelper.RunAsync(
-			"i2cget", $"-y {bus} {ExpectedAddress} 0x06", 5_000, ct);
-		if (reportStep is not null)
-			await reportStep($"i2cget -y {bus} {ExpectedAddress} 0x06", readResult.Stdout + readResult.Stderr, readResult.ExitCode != 0);
-
-		var registerRead = readResult.ExitCode == 0 && !string.IsNullOrWhiteSpace(readResult.Stdout);
-		var registerValue = readResult.Stdout.Trim();
-
-		messages.Add(registerRead
-			? $"Register 0x06 read successfully: {registerValue}"
-			: $"i2cget failed (exit {readResult.ExitCode}): {readResult.Stderr.Trim()}");
-
-		return new DiagnosticEnvelope
+		}
+		catch (Exception ex) when (ex is not OperationCanceledException)
 		{
-			PeripheralId = PeripheralId,
-			DependencyAvailable = true,
-			Status = registerRead ? PeripheralStatus.Ready : PeripheralStatus.Degraded,
-			Messages = messages,
-			Snapshot = new HealthSnapshot
+			_logger.LogWarning(ex, "Compass probe: gRPC call to compass-svc failed");
+			messages.Add($"gRPC error: {ex.GetType().Name}: {ex.Message}");
+			return new DiagnosticEnvelope
 			{
-				Values = new Dictionary<string, object?>
+				PeripheralId = PeripheralId,
+				DependencyAvailable = true,
+				Status = PeripheralStatus.Degraded,
+				Messages = messages,
+				Snapshot = new HealthSnapshot
 				{
-					["bus"] = bus,
-					["expected_address"] = ExpectedAddress,
-					["device_found"] = deviceFound,
-					["register_0x06"] = registerValue
-				}
-			},
-			CapturedAtUtc = DateTimeOffset.UtcNow
-		};
+					Values = new Dictionary<string, object?>
+					{
+						["service_available"] = true,
+						["grpc_error"] = ex.Message
+					}
+				},
+				CapturedAtUtc = DateTimeOffset.UtcNow
+			};
+		}
 	}
 
+	/// <summary>
+	/// Returns a summary of the latest heading reading from compass-svc.
+	/// </summary>
 	public async Task<string?> ReadRawSampleAsync(CancellationToken ct = default)
 	{
-		var bus = _config["Peripherals:Compass:I2cBus"] ?? "1";
-		// Read X-axis LSB (0x00) for a live heading sample
-		var result = await ProcessHelper.RunAsync(
-			"i2cget", $"-y {bus} {ExpectedAddress} 0x00", 3_000, ct);
-		return result.ExitCode == 0 ? $"x_lsb={result.Stdout.Trim()}" : null;
+		var host = _config["Peripherals:Compass:Host"] ?? "localhost";
+		var port = int.TryParse(_config["Peripherals:Compass:Port"], out var p) ? p : 5100;
+
+		try
+		{
+			using var channel = GrpcChannelFactory.Create(host, port);
+			var client = new CompassService.CompassServiceClient(channel);
+			using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+			cts.CancelAfter(3_000);
+			var heading = await client.GetHeadingAsync(new CompassHeadingRequest(), cancellationToken: cts.Token);
+			return $"heading={heading.HeadingDegrees:F1}° x={heading.X:F2} y={heading.Y:F2} z={heading.Z:F2}";
+		}
+		catch
+		{
+			return null;
+		}
 	}
 }

@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+option csharp_namespace = "ZScout.HwTest.App.Protos";
+
+package compass;
+
+// CompassService exposes the QMC5883L magnetometer via compass-svc.
+service CompassService {
+  // Returns the current device status and availability.
+  rpc GetStatus (CompassStatusRequest) returns (CompassStatusReply);
+
+  // Returns the latest heading and magnetometer readings.
+  rpc GetHeading (CompassHeadingRequest) returns (CompassHeadingReply);
+
+  // Streams continuous heading updates.
+  rpc StreamHeadings (CompassStreamRequest) returns (stream CompassHeadingReply);
+}
+
+message CompassStatusRequest {}
+
+message CompassStatusReply {
+  bool available = 1;
+  string device_address = 2;
+  string bus = 3;
+  string status_message = 4;
+}
+
+message CompassHeadingRequest {}
+
+message CompassHeadingReply {
+  double heading_degrees = 1;
+  double x = 2;
+  double y = 3;
+  double z = 4;
+  double temperature_c = 5;
+  bool overflow = 6;
+  string timestamp = 7;
+}
+
+message CompassStreamRequest {
+  int32 interval_ms = 1; // Desired update interval in milliseconds
+}
