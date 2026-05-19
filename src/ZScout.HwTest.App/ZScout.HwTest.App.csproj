@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="ZScout.HwTest.App.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\ZScout.HwTest.Contracts\ZScout.HwTest.Contracts.csproj" />
   </ItemGroup>
 

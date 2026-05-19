@@ -24,7 +24,7 @@ WORKDIR /app
 
 # Install hardware diagnostic tools needed at runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl gpsd-clients i2c-tools usbutils pciutils && \
+    curl gpsd-clients i2c-tools iw usbutils pciutils && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy published application from build stage
