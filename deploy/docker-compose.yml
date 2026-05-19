@@ -5,18 +5,17 @@ services:
     container_name: zscout-hw-test
     restart: unless-stopped
 
-    # Networking for hardware access
-    network_mode: host # Required for gpsd, I2C, and other device access
-    privileged: true # Required for device permissions
+    # Networking for Tier 2 service access (gps-svc, compass-svc, sdr-svc, mesh)
+    network_mode: host # Required for gRPC/TCP connections to Tier 2 services
+    # Note: --privileged removed — adapters now use Tier 2 service APIs (FR-014)
 
     # Port mapping (only active in bridge mode, ignored with network_mode: host)
     # ports:
     #   - "5000:5000"
 
-    # Volume mounts for persistent data and device access
+    # Volume mounts for persistent data and HaLow Tier A sysfs access
     volumes:
-      - /dev:/dev:ro # Device access (GPS, SDR, etc.)
-      - /sys:/sys:ro # System metrics
+      - /sys:/sys:ro # HaLow Tier A: USB enumeration and iw (FR-009)
       - ./data:/app/data # Persistent storage for run history
       - ./logs:/app/logs # Application logs
 

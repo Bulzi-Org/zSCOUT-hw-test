@@ -23,8 +23,10 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-arm64v8
 WORKDIR /app
 
 # Install hardware diagnostic tools needed at runtime
+# Note: i2c-tools removed — compass now uses compass-svc gRPC (FR-004)
+# Kept: gpsd-clients (GPS streaming), iw/usbutils/kmod (HaLow Tier A), pciutils
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl gpsd-clients i2c-tools iw usbutils pciutils && \
+    curl gpsd-clients iw usbutils kmod pciutils && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy published application from build stage

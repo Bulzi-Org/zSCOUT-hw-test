@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -7,14 +8,17 @@ using ZScout.HwTest.Contracts.Models;
 namespace ZScout.HwTest.App.Tests.Hardware.Halow;
 
 /// <summary>
-/// Tests for the HalowAdapter Layer 0-3 diagnostic pipeline.
+/// Tests for the HalowAdapter two-tier diagnostic pipeline.
 /// These tests run without MM8108 hardware — they verify the adapter
 /// handles absent hardware gracefully and returns correct status/envelope shapes.
 /// </summary>
 public sealed class HalowAdapterTests
 {
-	private static HalowAdapter CreateAdapter() =>
-		new(NullLogger<HalowAdapter>.Instance);
+	private static HalowAdapter CreateAdapter()
+	{
+		var config = new ConfigurationBuilder().Build();
+		return new HalowAdapter(NullLogger<HalowAdapter>.Instance, config);
+	}
 
 	// ── ProbeAsync tests ────────────────────────────────────────────────
 
@@ -36,7 +40,7 @@ public sealed class HalowAdapterTests
 	}
 
 	/// <summary>
-	/// The snapshot must contain all 9 required keys even when layers fail early.
+	/// The snapshot must contain all required keys (Tier A + Tier B) even when layers fail early.
 	/// </summary>
 	[Fact]
 	public async Task ProbeAsync_SnapshotContainsAllRequiredKeys()
@@ -46,6 +50,7 @@ public sealed class HalowAdapterTests
 		var result = await adapter.ProbeAsync(RunMode.Container);
 
 		var keys = result.Snapshot.Values.Keys;
+		// Tier A keys
 		Assert.Contains("usb_device_found", keys);
 		Assert.Contains("vendor_id", keys);
 		Assert.Contains("module_loaded", keys);
@@ -55,6 +60,13 @@ public sealed class HalowAdapterTests
 		Assert.Contains("phy_name", keys);
 		Assert.Contains("supported_channels", keys);
 		Assert.Contains("health_check_ok", keys);
+		// Tier B keys
+		Assert.Contains("mesh_service_available", keys);
+		Assert.Contains("mesh_associated", keys);
+		Assert.Contains("peer_count", keys);
+		Assert.Contains("gateway_mode", keys);
+		Assert.Contains("bat0_ip", keys);
+		Assert.Contains("internet_reachable", keys);
 	}
 
 	/// <summary>

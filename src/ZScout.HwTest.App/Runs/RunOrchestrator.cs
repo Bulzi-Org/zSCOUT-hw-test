@@ -41,8 +41,9 @@ public sealed class RunOrchestrator
 
 	/// <summary>
 	/// Execute the full suite for the given run.
-	/// Adapters run concurrently via Task.WhenAll so long-lived adapters (e.g. GPS streaming)
-	/// do not block short-lived ones (SDR, HaLow, Compass).
+	/// Adapters run concurrently and results are processed incrementally as each completes
+	/// (FR-012). Evidence is saved and per-adapter verdicts are assigned immediately,
+	/// so fast adapters (Compass, SDR, HaLow) deliver results while GPS continues streaming.
 	/// Each adapter is isolated — a failure in one never affects others (T024).
 	/// </summary>
 	public async Task ExecuteAsync(string runId, CancellationToken ct = default)
@@ -63,26 +64,33 @@ public sealed class RunOrchestrator
 
 		using var scope = _logger.BeginScope(new Dictionary<string, object> { ["RunId"] = runId, ["RunMode"] = run.Mode.ToString() });
 
-		// Execute adapters concurrently — GPS streams indefinitely until ct is cancelled;
-		// other adapters complete quickly and their evidence is available immediately.
+		// Launch all adapter probes concurrently
 		var probeTasks = _adapters.Select(adapter => ProbeAdapterSafeAsync(adapter, run, ct)).ToList();
-		var results = await Task.WhenAll(probeTasks);
 
+		// Process results incrementally as each adapter completes (FR-012)
 		var evidenceList = new List<PeripheralEvidence>();
 		var statusByPeripheral = new Dictionary<PeripheralId, PeripheralStatus>();
 
-		foreach (var (ev, status) in results)
+		await foreach (var completedTask in Task.WhenEach(probeTasks))
 		{
+			var (ev, status) = await completedTask;
 			evidenceList.Add(ev);
 			statusByPeripheral[ev.PeripheralId] = status;
+
+			// Save evidence and assign verdict immediately (FR-012)
 			await _evidence.SaveAsync(ev, CancellationToken.None);
+			await AssignVerdictAsync(run, ev, status, CancellationToken.None);
+
+			_logger.LogInformation(
+				"Adapter {Peripheral} completed with status {Status} in run {RunId}",
+				ev.PeripheralId, status, runId);
 		}
 
 		// Unregister CTS now that all probes are done (normal completion path)
 		_cancellation.Unregister(runId);
 
-		// Auto-assign verdicts and complete the run
-		await AutoAssignVerdictsAsync(run, evidenceList, statusByPeripheral, CancellationToken.None);
+		// Complete the run with overall outcome
+		await CompleteRunAsync(run, statusByPeripheral, CancellationToken.None);
 
 		_logger.LogInformation("Run {RunId} completed with auto-assigned verdicts", runId);
 	}
@@ -140,54 +148,51 @@ public sealed class RunOrchestrator
 	}
 
 	/// <summary>
-	/// Automatically assigns verdicts based on adapter results:
+	/// Assigns a verdict for a single adapter result immediately upon completion.
 	/// Ready → Pass, Degraded/Unavailable → Fail.
-	/// Transitions run to Completed with overall outcome.
 	/// </summary>
-	private async Task AutoAssignVerdictsAsync(
+	private async Task AssignVerdictAsync(
 		TestRun run,
-		List<PeripheralEvidence> evidenceList,
+		PeripheralEvidence ev,
+		PeripheralStatus status,
+		CancellationToken ct)
+	{
+		var outcome = status == PeripheralStatus.Ready
+			? VerdictOutcome.Pass
+			: VerdictOutcome.Fail;
+
+		string? failureReason = outcome == VerdictOutcome.Fail
+			? ev.DiagnosticMessages.Count > 0
+				? ev.DiagnosticMessages[^1]
+				: $"{status}"
+			: null;
+
+		var verdict = new PeripheralVerdict
+		{
+			VerdictId = Guid.NewGuid().ToString("N"),
+			RunId = run.RunId,
+			PeripheralId = ev.PeripheralId,
+			Outcome = outcome,
+			FailureReason = failureReason,
+			AssignedByUserId = "system",
+			AssignedAtUtc = DateTimeOffset.UtcNow
+		};
+
+		await _verdicts.SaveAsync(verdict, ct);
+		_logger.LogInformation(
+			"Auto-verdict {Outcome} assigned for {Peripheral} in run {RunId}",
+			outcome, ev.PeripheralId, run.RunId);
+	}
+
+	/// <summary>
+	/// Completes the run with an overall outcome computed from all adapter statuses.
+	/// </summary>
+	private async Task CompleteRunAsync(
+		TestRun run,
 		Dictionary<PeripheralId, PeripheralStatus> statusByPeripheral,
 		CancellationToken ct)
 	{
-		var anyFail = false;
-
-		foreach (var ev in evidenceList)
-		{
-			var status = statusByPeripheral.TryGetValue(ev.PeripheralId, out var s)
-				? s
-				: PeripheralStatus.Unknown;
-
-			var outcome = status == PeripheralStatus.Ready
-				? VerdictOutcome.Pass
-				: VerdictOutcome.Fail;
-
-			string? failureReason = outcome == VerdictOutcome.Fail
-				? ev.DiagnosticMessages.Count > 0
-					? ev.DiagnosticMessages[^1]
-					: $"{status}"
-				: null;
-
-			if (outcome == VerdictOutcome.Fail)
-				anyFail = true;
-
-			var verdict = new PeripheralVerdict
-			{
-				VerdictId = Guid.NewGuid().ToString("N"),
-				RunId = run.RunId,
-				PeripheralId = ev.PeripheralId,
-				Outcome = outcome,
-				FailureReason = failureReason,
-				AssignedByUserId = "system",
-				AssignedAtUtc = DateTimeOffset.UtcNow
-			};
-
-			await _verdicts.SaveAsync(verdict, ct);
-			_logger.LogInformation(
-				"Auto-verdict {Outcome} assigned for {Peripheral} in run {RunId}",
-				outcome, ev.PeripheralId, run.RunId);
-		}
-
+		var anyFail = statusByPeripheral.Values.Any(s => s != PeripheralStatus.Ready);
 		var overallOutcome = anyFail ? OverallOutcome.Fail : OverallOutcome.Pass;
 		var completed = run with
 		{
