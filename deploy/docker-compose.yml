@@ -1,13 +1,67 @@
 services:
+  # ── Tier 2 Services (dependencies) ──────────────────────────────────────────
+  # These services must be running before zscout-hw-test can probe peripherals.
+
+  gps-svc:
+    image: ghcr.io/bulzi-org/zscout-gps-svc:latest
+    container_name: zscout-gps-svc
+    restart: unless-stopped
+    network_mode: host # Exposes REST :5200 and gpsd :2947
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0 # GPS GNSS receiver
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5200/api/status" ]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  compass-svc:
+    image: ghcr.io/bulzi-org/zscout-compass-svc:latest
+    container_name: zscout-compass-svc
+    restart: unless-stopped
+    network_mode: host # Exposes REST :5100
+    devices:
+      - /dev/i2c-1:/dev/i2c-1 # QMC5883L magnetometer on I2C bus 1
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5100/api/status" ]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  sdr-svc:
+    image: ghcr.io/bulzi-org/zscout-sdr-svc:latest
+    container_name: zscout-sdr-svc
+    restart: unless-stopped
+    network_mode: host # Exposes REST :5101
+    devices:
+      - /dev/bus/usb:/dev/bus/usb # Wavelet-Lab uSDR via USB
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5101/api/status" ]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # ── Main Application ────────────────────────────────────────────────────────
+
   # Main zSCOUT hardware test dashboard
   zscout-hw-test:
     image: ghcr.io/bulzi-org/zscout-hw-test:latest
     container_name: zscout-hw-test
     restart: unless-stopped
+    depends_on:
+      gps-svc:
+        condition: service_healthy
+      compass-svc:
+        condition: service_healthy
+      sdr-svc:
+        condition: service_healthy
 
     # Networking for Tier 2 service access (gps-svc, compass-svc, sdr-svc, mesh)
-    network_mode: host # Required for gRPC/TCP connections to Tier 2 services
-    # Note: --privileged removed — adapters now use Tier 2 service APIs (FR-014)
+    network_mode: host # Required for REST/TCP connections to Tier 2 services
+    # Note: --privileged removed — adapters now use Tier 2 service REST APIs (FR-014)
 
     # Port mapping (only active in bridge mode, ignored with network_mode: host)
     # ports:

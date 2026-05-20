@@ -373,11 +373,11 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 			var root = doc.RootElement;
 
 			var associated = root.TryGetProperty("associated", out var assocEl) && assocEl.GetBoolean();
-			var peerCount = root.TryGetProperty("peerCount", out var pcEl) ? pcEl.GetInt32() : 0;
-			var gatewayMode = root.TryGetProperty("gatewayMode", out var gwEl) ? gwEl.GetString() ?? "" : "";
-			var bat0Ip = root.TryGetProperty("bat0Ip", out var batEl) ? batEl.GetString() ?? "" : "";
-			var internetReachable = root.TryGetProperty("internetReachable", out var inetEl) && inetEl.GetBoolean();
-			var meshStatusMessage = root.TryGetProperty("statusMessage", out var msmEl) ? msmEl.GetString() ?? "" : "";
+			var peerCount = root.TryGetProperty("peer_count", out var pcEl) ? pcEl.GetInt32() : 0;
+			var gatewayMode = root.TryGetProperty("gateway_mode", out var gwEl) ? gwEl.GetString() ?? "" : "";
+			var bat0Ip = root.TryGetProperty("bat0_ip", out var batEl) ? batEl.GetString() ?? "" : "";
+			var internetReachable = root.TryGetProperty("internet_reachable", out var inetEl) && inetEl.GetBoolean();
+			var meshStatusMessage = root.TryGetProperty("status_message", out var msmEl) ? msmEl.GetString() ?? "" : "";
 
 			if (reportStep is not null)
 				await reportStep("GET /api/status",

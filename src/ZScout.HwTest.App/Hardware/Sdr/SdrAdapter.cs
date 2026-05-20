@@ -54,14 +54,13 @@ public sealed class SdrAdapter : IHardwareAdapter
 			using var statusDoc = await JsonDocument.ParseAsync(await statusResponse.Content.ReadAsStreamAsync(statusCts.Token), cancellationToken: statusCts.Token);
 			var statusRoot = statusDoc.RootElement;
 
-			var available = statusRoot.TryGetProperty("available", out var availEl) && availEl.GetBoolean();
-			var driver = statusRoot.TryGetProperty("driver", out var drvEl) ? drvEl.GetString() ?? "" : "";
-			var deviceLabel = statusRoot.TryGetProperty("deviceLabel", out var lblEl) ? lblEl.GetString() ?? "" : "";
-			var serial = statusRoot.TryGetProperty("serial", out var serEl) ? serEl.GetString() ?? "" : "";
-			var statusMessage = statusRoot.TryGetProperty("statusMessage", out var msgEl) ? msgEl.GetString() ?? "" : "";
+			var available = statusRoot.TryGetProperty("device_found", out var availEl) && availEl.GetBoolean();
+			var driverInfo = statusRoot.TryGetProperty("driver_info", out var drvEl) ? drvEl.GetString() ?? "" : "";
+			var probeOk = statusRoot.TryGetProperty("probe_ok", out var probeEl) && probeEl.GetBoolean();
+			var statusMessage = statusRoot.TryGetProperty("status", out var msgEl) ? msgEl.GetString() ?? "" : "";
 
 			if (reportStep is not null)
-				await reportStep("GET /api/status", $"available={available} driver={driver} label={deviceLabel}", !available);
+				await reportStep("GET /api/status", $"device_found={available} driver_info={driverInfo} probe_ok={probeOk}", !available);
 
 			messages.Add($"sdr-svc reachable on {host}:{port}");
 			_logger.LogInformation("SDR probe: sdr-svc reachable on {Host}:{Port}", host, port);
@@ -88,7 +87,7 @@ public sealed class SdrAdapter : IHardwareAdapter
 				};
 			}
 
-			messages.Add($"SDR device found: {driver} — {deviceLabel}");
+			messages.Add($"SDR device found: {driverInfo}");
 
 			// 2. Get capabilities via REST (FR-007)
 			using var capsCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -98,15 +97,31 @@ public sealed class SdrAdapter : IHardwareAdapter
 			using var capsDoc = await JsonDocument.ParseAsync(await capsResponse.Content.ReadAsStreamAsync(capsCts.Token), cancellationToken: capsCts.Token);
 			var capsRoot = capsDoc.RootElement;
 
-			var minFreqHz = capsRoot.TryGetProperty("minFrequencyHz", out var minFEl) ? minFEl.GetDouble() : 0.0;
-			var maxFreqHz = capsRoot.TryGetProperty("maxFrequencyHz", out var maxFEl) ? maxFEl.GetDouble() : 0.0;
-			var minGainDb = capsRoot.TryGetProperty("minGainDb", out var minGEl) ? minGEl.GetDouble() : 0.0;
-			var maxGainDb = capsRoot.TryGetProperty("maxGainDb", out var maxGEl) ? maxGEl.GetDouble() : 0.0;
+			var minFreqHz = 0.0;
+			var maxFreqHz = 0.0;
+			if (capsRoot.TryGetProperty("rx_freq_range_hz", out var rxFreqEl) && rxFreqEl.ValueKind == JsonValueKind.Object)
+			{
+				minFreqHz = rxFreqEl.TryGetProperty("min", out var minFEl) ? minFEl.GetDouble() : 0.0;
+				maxFreqHz = rxFreqEl.TryGetProperty("max", out var maxFEl) ? maxFEl.GetDouble() : 0.0;
+			}
+			var minGainDb = 0.0;
+			var maxGainDb = 0.0;
+			if (capsRoot.TryGetProperty("rx_gains", out var gainsEl) && gainsEl.ValueKind == JsonValueKind.Object)
+			{
+				foreach (var gain in gainsEl.EnumerateObject())
+				{
+					if (gain.Value.TryGetProperty("max", out var maxGEl))
+					{
+						var gMax = maxGEl.GetDouble();
+						if (gMax > maxGainDb) maxGainDb = gMax;
+					}
+				}
+			}
 
 			if (reportStep is not null)
 				await reportStep("GET /api/capabilities", $"freq={minFreqHz / 1e6:F1}-{maxFreqHz / 1e6:F1}MHz gain={minGainDb:F0}-{maxGainDb:F0}dB", false);
 
-			messages.Add($"SDR PASS: {driver} tuning {minFreqHz / 1e6:F1}-{maxFreqHz / 1e6:F1} MHz, gain {minGainDb:F0}-{maxGainDb:F0} dB");
+			messages.Add($"SDR PASS: {driverInfo} tuning {minFreqHz / 1e6:F1}-{maxFreqHz / 1e6:F1} MHz, gain {minGainDb:F0}-{maxGainDb:F0} dB");
 
 			return new DiagnosticEnvelope
 			{
@@ -120,9 +135,8 @@ public sealed class SdrAdapter : IHardwareAdapter
 					{
 						["service_available"] = true,
 						["device_found"] = true,
-						["driver"] = driver,
-						["device_label"] = deviceLabel,
-						["serial"] = serial,
+						["driver_info"] = driverInfo,
+						["probe_ok"] = probeOk,
 						["min_frequency_hz"] = minFreqHz,
 						["max_frequency_hz"] = maxFreqHz,
 						["min_gain_db"] = minGainDb,
@@ -174,10 +188,9 @@ public sealed class SdrAdapter : IHardwareAdapter
 			response.EnsureSuccessStatusCode();
 			using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cts.Token), cancellationToken: cts.Token);
 			var root = doc.RootElement;
-			var drv = root.TryGetProperty("driver", out var drvEl) ? drvEl.GetString() ?? "" : "";
-			var lbl = root.TryGetProperty("deviceLabel", out var lblEl) ? lblEl.GetString() ?? "" : "";
-			var avail = root.TryGetProperty("available", out var availEl) && availEl.GetBoolean();
-			return $"driver={drv} label={lbl} available={avail}";
+			var drv = root.TryGetProperty("driver_info", out var drvEl) ? drvEl.GetString() ?? "" : "";
+			var avail = root.TryGetProperty("device_found", out var availEl) && availEl.GetBoolean();
+			return $"driver_info={drv} device_found={avail}";
 		}
 		catch
 		{
