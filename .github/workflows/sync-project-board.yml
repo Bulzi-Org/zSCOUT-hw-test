@@ -1,0 +1,111 @@
+name: Sync Project Board
+
+on:
+  issues:
+    types: [assigned]
+  pull_request:
+    types: [opened, ready_for_review, closed]
+
+jobs:
+  sync-board:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      PROJECT_ID: PVT_kwDOBuYw984BX6ma
+      FIELD_ID: PVTSSF_lADOBuYw984BX6mazhTEHqU
+      PROJECT_NUM: "1"
+      ORG: Bulzi-Org
+      IN_PROGRESS: 47fc9ee4
+      IN_REVIEW: df73e18b
+      DONE: "98236657"
+    steps:
+      - name: Move issue to In Progress on assignment
+        if: github.event_name == 'issues' && github.event.action == 'assigned'
+        run: |
+          ITEM_ID=$(gh project item-list "$PROJECT_NUM" --owner "$ORG" --format json --limit 200 | \
+            jq -r --arg repo "${{ github.repository }}" --argjson num ${{ github.event.issue.number }} \
+            '.items[] | select(.content.repository == $repo and .content.number == $num) | .id')
+          if [ -n "$ITEM_ID" ] && [ "$ITEM_ID" != "null" ]; then
+            gh project item-edit --project-id "$PROJECT_ID" --id "$ITEM_ID" \
+              --field-id "$FIELD_ID" --single-select-option-id "$IN_PROGRESS"
+            echo "✓ ${{ github.repository }}#${{ github.event.issue.number }} → In progress"
+          else
+            echo "⚠ Issue not found on project board"
+          fi
+
+      - name: Move linked issues to In Review on PR open
+        if: >-
+          github.event_name == 'pull_request' &&
+          (github.event.action == 'opened' || github.event.action == 'ready_for_review')
+        run: |
+          BODY=$(gh pr view ${{ github.event.pull_request.number }} \
+            --repo "${{ github.repository }}" --json body -q '.body' 2>/dev/null || true)
+          ITEMS=$(gh project item-list "$PROJECT_NUM" --owner "$ORG" --format json --limit 200)
+
+          update_item() {
+            local repo="$1" num="$2" status="$3"
+            local id
+            id=$(echo "$ITEMS" | jq -r --arg r "$repo" --argjson n "$num" \
+              '.items[] | select(.content.repository == $r and .content.number == $n) | .id')
+            if [ -n "$id" ] && [ "$id" != "null" ]; then
+              gh project item-edit --project-id "$PROJECT_ID" --id "$id" \
+                --field-id "$FIELD_ID" --single-select-option-id "$status"
+              echo "✓ ${repo}#${num} → In review"
+            fi
+          }
+
+          # Same-repo: Closes #N, Fixes #N, Resolves #N
+          echo "$BODY" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#[0-9]+' | \
+            grep -oE '[0-9]+' | sort -u | while read -r NUM; do
+              update_item "${{ github.repository }}" "$NUM" "$IN_REVIEW"
+            done
+
+          # Cross-repo: Closes Org/Repo#N
+          echo "$BODY" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+' | \
+            grep -oE '[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+' | sort -u | while read -r REF; do
+              REPO="${REF%%#*}"
+              NUM="${REF##*#}"
+              update_item "$REPO" "$NUM" "$IN_REVIEW"
+            done
+
+          # Also move the PR itself if it's on the board
+          update_item "${{ github.repository }}" "${{ github.event.pull_request.number }}" "$IN_REVIEW"
+
+      - name: Move linked issues to Done on PR merge
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.action == 'closed' &&
+          github.event.pull_request.merged == true
+        run: |
+          BODY=$(gh pr view ${{ github.event.pull_request.number }} \
+            --repo "${{ github.repository }}" --json body -q '.body' 2>/dev/null || true)
+          ITEMS=$(gh project item-list "$PROJECT_NUM" --owner "$ORG" --format json --limit 200)
+
+          update_item() {
+            local repo="$1" num="$2" status="$3"
+            local id
+            id=$(echo "$ITEMS" | jq -r --arg r "$repo" --argjson n "$num" \
+              '.items[] | select(.content.repository == $r and .content.number == $n) | .id')
+            if [ -n "$id" ] && [ "$id" != "null" ]; then
+              gh project item-edit --project-id "$PROJECT_ID" --id "$id" \
+                --field-id "$FIELD_ID" --single-select-option-id "$status"
+              echo "✓ ${repo}#${num} → Done"
+            fi
+          }
+
+          # Same-repo references
+          echo "$BODY" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#[0-9]+' | \
+            grep -oE '[0-9]+' | sort -u | while read -r NUM; do
+              update_item "${{ github.repository }}" "$NUM" "$DONE"
+            done
+
+          # Cross-repo references
+          echo "$BODY" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+' | \
+            grep -oE '[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[0-9]+' | sort -u | while read -r REF; do
+              REPO="${REF%%#*}"
+              NUM="${REF##*#}"
+              update_item "$REPO" "$NUM" "$DONE"
+            done
+
+          # Also move the PR itself if it's on the board
+          update_item "${{ github.repository }}" "${{ github.event.pull_request.number }}" "$DONE"
