@@ -39,7 +39,10 @@ builder.Services.AddSingleton<RunCancellationService>();
 builder.Services.AddSingleton<RunResultSerializer>();
 builder.Services.AddSingleton<RunConfigurationService>();
 
-// ── Hardware Adapters ─────────────────────────────────────────────────────────
+// ── HTTP Clients (Tier 2 service communication) ────────────────────────────────────
+builder.Services.AddHttpClient();
+
+// ── Hardware Adapters ─────────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<IHardwareAdapter, GpsAdapter>();
 builder.Services.AddSingleton<IHardwareAdapter, SdrAdapter>();
 builder.Services.AddSingleton<IHardwareAdapter, HalowAdapter>();

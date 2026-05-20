@@ -11,14 +11,14 @@ public sealed class GpsAdapterReportStepTests
 {
 	/// <summary>
 	/// When gps-svc is not reachable, the adapter returns Unavailable
-	/// and reports the TCP connect attempt exactly once via reportStep.
+	/// and reports via reportStep.
 	/// </summary>
 	[Fact]
-	public async Task ProbeAsync_WhenGpsSvcNotReachable_TcpCheckReportedExactlyOnce()
+	public async Task ProbeAsync_WhenGpsSvcNotReachable_ReportsUnreachable()
 	{
 		ILogger<GpsAdapter> logger = NullLogger<GpsAdapter>.Instance;
 		var config = new ConfigurationBuilder().Build();
-		var adapter = new GpsAdapter(logger, config);
+		var adapter = new GpsAdapter(logger, config, new StubHttpClientFactory());
 
 		var calls = new List<(string Cmd, bool IsError)>();
 		Task ReportStep(string cmd, string output, bool isError)
@@ -30,13 +30,12 @@ public sealed class GpsAdapterReportStepTests
 		var result = await adapter.ProbeAsync(RunMode.Container, ReportStep);
 
 		// Without gps-svc running, the adapter must return Unavailable
-		// and reportStep must have been called exactly once for the TCP check.
 		Assert.Equal(PeripheralStatus.Unavailable, result.Status);
 		Assert.False(result.DependencyAvailable);
 
-		var tcpCalls = calls.Where(c => c.Cmd.StartsWith("TCP connect")).ToList();
-		Assert.Single(tcpCalls);
-		Assert.True(tcpCalls[0].IsError);
+		// At least one report step should indicate unreachability
+		Assert.NotEmpty(calls);
+		Assert.Contains(calls, c => c.IsError);
 	}
 
 	[Fact]
@@ -44,7 +43,7 @@ public sealed class GpsAdapterReportStepTests
 	{
 		ILogger<GpsAdapter> logger = NullLogger<GpsAdapter>.Instance;
 		var config = new ConfigurationBuilder().Build();
-		var adapter = new GpsAdapter(logger, config);
+		var adapter = new GpsAdapter(logger, config, new StubHttpClientFactory());
 
 		// Must not throw when no reportStep is provided (backward-compat)
 		var result = await adapter.ProbeAsync(RunMode.Host, reportStep: null);

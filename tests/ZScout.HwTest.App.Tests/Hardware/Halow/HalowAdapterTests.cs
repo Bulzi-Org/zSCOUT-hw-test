@@ -17,7 +17,7 @@ public sealed class HalowAdapterTests
 	private static HalowAdapter CreateAdapter()
 	{
 		var config = new ConfigurationBuilder().Build();
-		return new HalowAdapter(NullLogger<HalowAdapter>.Instance, config);
+		return new HalowAdapter(NullLogger<HalowAdapter>.Instance, config, new StubHttpClientFactory());
 	}
 
 	// ── ProbeAsync tests ────────────────────────────────────────────────

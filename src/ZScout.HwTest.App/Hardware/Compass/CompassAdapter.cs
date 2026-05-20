@@ -1,16 +1,15 @@
-using Grpc.Net.Client;
+using System.Text.Json;
 using ZScout.HwTest.App.Hardware.Common;
-using ZScout.HwTest.App.Protos;
 using ZScout.HwTest.Contracts.Models;
 
 namespace ZScout.HwTest.App.Hardware.Compass;
 
 /// <summary>
-/// Compass adapter: probes the QMC5883L magnetometer via compass-svc gRPC (FR-004).
+/// Compass adapter: probes the QMC5883L magnetometer via compass-svc REST API (FR-004).
 /// Connects to compass-svc on configurable host:port (default localhost:5100) instead
 /// of directly accessing the I2C bus. Eliminates the need for /dev/i2c-* device
 /// pass-through and --privileged mode.
-/// T017: Heading, XYZ, temperature, overflow data via gRPC.
+/// T017: Heading, XYZ, temperature, overflow data via HTTP REST.
 /// </summary>
 public sealed class CompassAdapter : IHardwareAdapter
 {
@@ -18,15 +17,17 @@ public sealed class CompassAdapter : IHardwareAdapter
 
 	private readonly ILogger<CompassAdapter> _logger;
 	private readonly IConfiguration _config;
+	private readonly IHttpClientFactory _httpClientFactory;
 
-	public CompassAdapter(ILogger<CompassAdapter> logger, IConfiguration config)
+	public CompassAdapter(ILogger<CompassAdapter> logger, IConfiguration config, IHttpClientFactory httpClientFactory)
 	{
 		_logger = logger;
 		_config = config;
+		_httpClientFactory = httpClientFactory;
 	}
 
 	/// <summary>
-	/// Probes the compass via compass-svc gRPC API (FR-004, FR-005).
+	/// Probes the compass via compass-svc REST API (FR-004, FR-005).
 	/// Returns Ready with heading data on success, Unavailable if service is not reachable.
 	/// </summary>
 	public async Task<DiagnosticEnvelope> ProbeAsync(RunMode mode, Func<string, string, bool, Task>? reportStep = null, CancellationToken ct = default)
@@ -37,37 +38,36 @@ public sealed class CompassAdapter : IHardwareAdapter
 		var host = _config["Peripherals:Compass:Host"] ?? "localhost";
 		var port = int.TryParse(_config["Peripherals:Compass:Port"], out var p) ? p : 5100;
 		var timeoutMs = int.TryParse(_config["Peripherals:Compass:TimeoutMs"], out var t) ? t : 5_000;
+		var baseUrl = $"http://{host}:{port}";
 
-		// 1. Check gRPC service reachability via TCP (FR-018)
-		var reachable = await TcpHealthCheck.CheckAsync(host, port, timeoutMs, ct);
-		if (reportStep is not null)
-			await reportStep($"TCP connect {host}:{port}", reachable ? "connected" : "unreachable", !reachable);
-
-		if (!reachable)
-		{
-			_logger.LogWarning("Compass probe: compass-svc not reachable on {Host}:{Port}", host, port);
-			return DiagnosticEnvelope.Unavailable(PeripheralId, $"compass-svc not reachable on {host}:{port}");
-		}
-
-		messages.Add($"compass-svc reachable on {host}:{port}");
-		_logger.LogInformation("Compass probe: compass-svc reachable on {Host}:{Port}", host, port);
-
-		// 2. Query compass-svc via gRPC
-		using var channel = GrpcChannelFactory.Create(host, port);
-		var client = new CompassService.CompassServiceClient(channel);
+		var client = _httpClientFactory.CreateClient("CompassSvc");
+		client.BaseAddress = new Uri(baseUrl);
+		client.Timeout = TimeSpan.FromMilliseconds(timeoutMs);
 
 		try
 		{
-			// Check device status
+			// 1. Check device status via REST (FR-018)
 			using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 			statusCts.CancelAfter(timeoutMs);
-			var status = await client.GetStatusAsync(new CompassStatusRequest(), cancellationToken: statusCts.Token);
-			if (reportStep is not null)
-				await reportStep("CompassService.GetStatus", $"available={status.Available} addr={status.DeviceAddress} bus={status.Bus}", !status.Available);
+			using var statusResponse = await client.GetAsync("/api/status", statusCts.Token);
+			statusResponse.EnsureSuccessStatusCode();
+			using var statusDoc = await JsonDocument.ParseAsync(await statusResponse.Content.ReadAsStreamAsync(statusCts.Token), cancellationToken: statusCts.Token);
+			var statusRoot = statusDoc.RootElement;
 
-			if (!status.Available)
+			var available = statusRoot.TryGetProperty("device_found", out var availEl) && availEl.GetBoolean();
+			var deviceAddress = statusRoot.TryGetProperty("device_address", out var addrEl) ? addrEl.GetString() ?? "" : "";
+			var bus = statusRoot.TryGetProperty("i2c_bus", out var busEl) ? busEl.GetInt32().ToString() : "";
+			var statusMessage = statusRoot.TryGetProperty("status", out var msgEl) ? msgEl.GetString() ?? "" : "";
+
+			if (reportStep is not null)
+				await reportStep("GET /api/status", $"available={available} addr={deviceAddress} bus={bus}", !available);
+
+			messages.Add($"compass-svc reachable on {host}:{port}");
+			_logger.LogInformation("Compass probe: compass-svc reachable on {Host}:{Port}", host, port);
+
+			if (!available)
 			{
-				messages.Add($"compass-svc reports device unavailable: {status.StatusMessage}");
+				messages.Add($"compass-svc reports device unavailable: {statusMessage}");
 				return new DiagnosticEnvelope
 				{
 					PeripheralId = PeripheralId,
@@ -80,27 +80,38 @@ public sealed class CompassAdapter : IHardwareAdapter
 						{
 							["service_available"] = true,
 							["device_available"] = false,
-							["status_message"] = status.StatusMessage
+							["status_message"] = statusMessage
 						}
 					},
 					CapturedAtUtc = DateTimeOffset.UtcNow
 				};
 			}
 
-			messages.Add($"Device available at {status.DeviceAddress} on bus {status.Bus}");
+			messages.Add($"Device available at {deviceAddress} on bus {bus}");
 
-			// Get heading data (FR-005)
+			// 2. Get heading data via REST (FR-005)
 			using var headingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 			headingCts.CancelAfter(timeoutMs);
-			var heading = await client.GetHeadingAsync(new CompassHeadingRequest(), cancellationToken: headingCts.Token);
-			if (reportStep is not null)
-				await reportStep("CompassService.GetHeading", $"heading={heading.HeadingDegrees:F1}° x={heading.X:F2} y={heading.Y:F2} z={heading.Z:F2}", false);
+			using var headingResponse = await client.GetAsync("/api/heading", headingCts.Token);
+			headingResponse.EnsureSuccessStatusCode();
+			using var headingDoc = await JsonDocument.ParseAsync(await headingResponse.Content.ReadAsStreamAsync(headingCts.Token), cancellationToken: headingCts.Token);
+			var headingRoot = headingDoc.RootElement;
 
-			var hasNonZeroData = heading.X != 0 || heading.Y != 0 || heading.Z != 0;
+			var headingDegrees = headingRoot.TryGetProperty("heading_degrees", out var hdEl) ? hdEl.GetDouble() : 0.0;
+			var x = headingRoot.TryGetProperty("x", out var xEl) ? xEl.GetDouble() : 0.0;
+			var y = headingRoot.TryGetProperty("y", out var yEl) ? yEl.GetDouble() : 0.0;
+			var z = headingRoot.TryGetProperty("z", out var zEl) ? zEl.GetDouble() : 0.0;
+			var temperatureC = headingRoot.TryGetProperty("temperature", out var tempEl) ? tempEl.GetDouble() : 0.0;
+			var overflow = headingRoot.TryGetProperty("overflow", out var ovEl) && ovEl.GetBoolean();
+
+			if (reportStep is not null)
+				await reportStep("GET /api/heading", $"heading={headingDegrees:F1}° x={x:F2} y={y:F2} z={z:F2}", false);
+
+			var hasNonZeroData = x != 0 || y != 0 || z != 0;
 			var finalStatus = hasNonZeroData ? PeripheralStatus.Ready : PeripheralStatus.Degraded;
 
 			messages.Add(hasNonZeroData
-				? $"Compass PASS: heading={heading.HeadingDegrees:F1}° XYZ=({heading.X:F2},{heading.Y:F2},{heading.Z:F2}) temp={heading.TemperatureC:F1}°C"
+				? $"Compass PASS: heading={headingDegrees:F1}° XYZ=({x:F2},{y:F2},{z:F2}) temp={temperatureC:F1}°C"
 				: "Compass FAIL: all magnetometer axes report zero — sensor may be malfunctioning");
 
 			return new DiagnosticEnvelope
@@ -115,14 +126,14 @@ public sealed class CompassAdapter : IHardwareAdapter
 					{
 						["service_available"] = true,
 						["device_available"] = true,
-						["device_address"] = status.DeviceAddress,
-						["bus"] = status.Bus,
-						["heading_degrees"] = heading.HeadingDegrees,
-						["x"] = heading.X,
-						["y"] = heading.Y,
-						["z"] = heading.Z,
-						["temperature_c"] = heading.TemperatureC,
-						["overflow"] = heading.Overflow
+						["device_address"] = deviceAddress,
+						["bus"] = bus,
+						["heading_degrees"] = headingDegrees,
+						["x"] = x,
+						["y"] = y,
+						["z"] = z,
+						["temperature_c"] = temperatureC,
+						["overflow"] = overflow
 					}
 				},
 				CapturedAtUtc = DateTimeOffset.UtcNow
@@ -130,8 +141,8 @@ public sealed class CompassAdapter : IHardwareAdapter
 		}
 		catch (Exception ex) when (ex is not OperationCanceledException)
 		{
-			_logger.LogWarning(ex, "Compass probe: gRPC call to compass-svc failed");
-			messages.Add($"gRPC error: {ex.GetType().Name}: {ex.Message}");
+			_logger.LogWarning(ex, "Compass probe: REST call to compass-svc failed");
+			messages.Add($"REST error: {ex.GetType().Name}: {ex.Message}");
 			return new DiagnosticEnvelope
 			{
 				PeripheralId = PeripheralId,
@@ -143,7 +154,7 @@ public sealed class CompassAdapter : IHardwareAdapter
 					Values = new Dictionary<string, object?>
 					{
 						["service_available"] = true,
-						["grpc_error"] = ex.Message
+						["rest_error"] = ex.Message
 					}
 				},
 				CapturedAtUtc = DateTimeOffset.UtcNow
@@ -161,12 +172,20 @@ public sealed class CompassAdapter : IHardwareAdapter
 
 		try
 		{
-			using var channel = GrpcChannelFactory.Create(host, port);
-			var client = new CompassService.CompassServiceClient(channel);
+			var client = _httpClientFactory.CreateClient("CompassSvc");
+			client.BaseAddress = new Uri($"http://{host}:{port}");
+			client.Timeout = TimeSpan.FromSeconds(3);
 			using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 			cts.CancelAfter(3_000);
-			var heading = await client.GetHeadingAsync(new CompassHeadingRequest(), cancellationToken: cts.Token);
-			return $"heading={heading.HeadingDegrees:F1}° x={heading.X:F2} y={heading.Y:F2} z={heading.Z:F2}";
+			using var response = await client.GetAsync("/api/heading", cts.Token);
+			response.EnsureSuccessStatusCode();
+			using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cts.Token), cancellationToken: cts.Token);
+			var root = doc.RootElement;
+			var hd = root.TryGetProperty("heading_degrees", out var hdEl) ? hdEl.GetDouble() : 0.0;
+			var x = root.TryGetProperty("x", out var xEl) ? xEl.GetDouble() : 0.0;
+			var y = root.TryGetProperty("y", out var yEl) ? yEl.GetDouble() : 0.0;
+			var z = root.TryGetProperty("z", out var zEl) ? zEl.GetDouble() : 0.0;
+			return $"heading={hd:F1}° x={x:F2} y={y:F2} z={z:F2}";
 		}
 		catch
 		{
