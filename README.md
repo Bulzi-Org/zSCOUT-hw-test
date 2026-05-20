@@ -19,18 +19,8 @@ SSH into your CM5 running the zSCOUT base image and run this single command to
 pull and start all services (hw-test dashboard + GPS, compass, and SDR services):
 
 ```bash
-# With GHCR token set (recommended — non-interactive)
-export GHCR_TOKEN="ghp_your_token_here"
 curl -fsSL https://raw.githubusercontent.com/Bulzi-Org/zSCOUT-hw-test/main/scripts/deploy-cm5.sh | bash
-
-# Or run without — the script will prompt for your GitHub username and PAT
-curl -fsSL -o deploy-cm5.sh https://raw.githubusercontent.com/Bulzi-Org/zSCOUT-hw-test/main/scripts/deploy-cm5.sh
-chmod +x deploy-cm5.sh && ./deploy-cm5.sh
 ```
-
-> **Note:** The GHCR container images require authentication. Create a GitHub
-> [Personal Access Token](https://github.com/settings/tokens) with `read:packages`
-> scope. The token is used for `docker login ghcr.io` only.
 
 This will:
 1. Create `/opt/zscout/hw-test/` with the docker-compose configuration
