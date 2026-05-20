@@ -54,9 +54,9 @@ public sealed class CompassAdapter : IHardwareAdapter
 			using var statusDoc = await JsonDocument.ParseAsync(await statusResponse.Content.ReadAsStreamAsync(statusCts.Token), cancellationToken: statusCts.Token);
 			var statusRoot = statusDoc.RootElement;
 
-			var available = statusRoot.TryGetProperty("device_found", out var availEl) && availEl.GetBoolean();
-			var deviceAddress = statusRoot.TryGetProperty("device_address", out var addrEl) ? addrEl.GetString() ?? "" : "";
-			var bus = statusRoot.TryGetProperty("i2c_bus", out var busEl) ? busEl.GetInt32().ToString() : "";
+			var available = statusRoot.TryGetProperty("deviceFound", out var availEl) && availEl.GetBoolean();
+			var deviceAddress = statusRoot.TryGetProperty("deviceAddress", out var addrEl) ? addrEl.GetString() ?? "" : "";
+			var bus = statusRoot.TryGetProperty("i2cBus", out var busEl) ? busEl.GetInt32().ToString() : "";
 			var statusMessage = statusRoot.TryGetProperty("status", out var msgEl) ? msgEl.GetString() ?? "" : "";
 
 			if (reportStep is not null)
@@ -97,7 +97,7 @@ public sealed class CompassAdapter : IHardwareAdapter
 			using var headingDoc = await JsonDocument.ParseAsync(await headingResponse.Content.ReadAsStreamAsync(headingCts.Token), cancellationToken: headingCts.Token);
 			var headingRoot = headingDoc.RootElement;
 
-			var headingDegrees = headingRoot.TryGetProperty("heading_degrees", out var hdEl) ? hdEl.GetDouble() : 0.0;
+			var headingDegrees = headingRoot.TryGetProperty("headingDegrees", out var hdEl) ? hdEl.GetDouble() : 0.0;
 			var x = headingRoot.TryGetProperty("x", out var xEl) ? xEl.GetDouble() : 0.0;
 			var y = headingRoot.TryGetProperty("y", out var yEl) ? yEl.GetDouble() : 0.0;
 			var z = headingRoot.TryGetProperty("z", out var zEl) ? zEl.GetDouble() : 0.0;
@@ -181,7 +181,7 @@ public sealed class CompassAdapter : IHardwareAdapter
 			response.EnsureSuccessStatusCode();
 			using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cts.Token), cancellationToken: cts.Token);
 			var root = doc.RootElement;
-			var hd = root.TryGetProperty("heading_degrees", out var hdEl) ? hdEl.GetDouble() : 0.0;
+			var hd = root.TryGetProperty("headingDegrees", out var hdEl) ? hdEl.GetDouble() : 0.0;
 			var x = root.TryGetProperty("x", out var xEl) ? xEl.GetDouble() : 0.0;
 			var y = root.TryGetProperty("y", out var yEl) ? yEl.GetDouble() : 0.0;
 			var z = root.TryGetProperty("z", out var zEl) ? zEl.GetDouble() : 0.0;

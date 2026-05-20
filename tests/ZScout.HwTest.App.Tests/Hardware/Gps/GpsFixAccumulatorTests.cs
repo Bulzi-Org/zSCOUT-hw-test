@@ -200,20 +200,20 @@ public sealed class GpsFixAccumulatorTests
 
 		// All 14 keys must be present
 		Assert.Equal(14, snapshot.Count);
-		Assert.Equal(true, snapshot["gpsd_running"]);
-		Assert.Equal(true, snapshot["fix_obtained"]);
-		Assert.Equal(3, snapshot["fix_quality"]);
+		Assert.Equal(true, snapshot["gpsdRunning"]);
+		Assert.Equal(true, snapshot["fixObtained"]);
+		Assert.Equal(3, snapshot["fixQuality"]);
 		Assert.Equal(37.123456, snapshot["latitude"]);
 		Assert.Equal(-122.654321, snapshot["longitude"]);
-		Assert.Equal(42.5, snapshot["altitude_m"]);
-		Assert.Equal("2026-05-18T00:45:00Z", snapshot["utc_time"]);
-		Assert.Equal(8, snapshot["satellites_used"]);
-		Assert.Equal(12, snapshot["satellites_visible"]);
+		Assert.Equal(42.5, snapshot["altitudeM"]);
+		Assert.Equal("2026-05-18T00:45:00Z", snapshot["utcTime"]);
+		Assert.Equal(8, snapshot["satellitesUsed"]);
+		Assert.Equal(12, snapshot["satellitesVisible"]);
 		Assert.Equal(1.2, snapshot["hdop"]);
-		Assert.Equal(42, snapshot["max_snr_db"]);
-		Assert.Equal(18, snapshot["min_snr_db"]);
-		Assert.NotNull(snapshot["speed_knots"]); // 0.1 m/s * 1.94384 ≈ 0.194
-		Assert.Equal(1, snapshot["total_fix_updates"]);
+		Assert.Equal(42, snapshot["maxSnrDb"]);
+		Assert.Equal(18, snapshot["minSnrDb"]);
+		Assert.NotNull(snapshot["speedKnots"]); // 0.1 m/s * 1.94384 ≈ 0.194
+		Assert.Equal(1, snapshot["totalFixUpdates"]);
 	}
 
 	[Fact]
@@ -225,20 +225,20 @@ public sealed class GpsFixAccumulatorTests
 		var snapshot = acc.BuildSnapshot(gpsdRunning: true);
 
 		Assert.Equal(14, snapshot.Count);
-		Assert.Equal(true, snapshot["gpsd_running"]);
-		Assert.Equal(false, snapshot["fix_obtained"]);
-		Assert.Equal(0, snapshot["fix_quality"]);
+		Assert.Equal(true, snapshot["gpsdRunning"]);
+		Assert.Equal(false, snapshot["fixObtained"]);
+		Assert.Equal(0, snapshot["fixQuality"]);
 		Assert.Null(snapshot["latitude"]);
 		Assert.Null(snapshot["longitude"]);
-		Assert.Null(snapshot["altitude_m"]);
-		Assert.Null(snapshot["utc_time"]);
-		Assert.Equal(0, snapshot["satellites_used"]);
-		Assert.Equal(0, snapshot["satellites_visible"]);
+		Assert.Null(snapshot["altitudeM"]);
+		Assert.Null(snapshot["utcTime"]);
+		Assert.Equal(0, snapshot["satellitesUsed"]);
+		Assert.Equal(0, snapshot["satellitesVisible"]);
 		Assert.Null(snapshot["hdop"]);
-		Assert.Null(snapshot["max_snr_db"]);
-		Assert.Null(snapshot["min_snr_db"]);
-		Assert.Null(snapshot["speed_knots"]);
-		Assert.Equal(0, snapshot["total_fix_updates"]);
+		Assert.Null(snapshot["maxSnrDb"]);
+		Assert.Null(snapshot["minSnrDb"]);
+		Assert.Null(snapshot["speedKnots"]);
+		Assert.Equal(0, snapshot["totalFixUpdates"]);
 	}
 
 	[Fact]
@@ -248,8 +248,8 @@ public sealed class GpsFixAccumulatorTests
 
 		var snapshot = acc.BuildSnapshot(gpsdRunning: false);
 
-		Assert.Equal(false, snapshot["gpsd_running"]);
-		Assert.Equal(false, snapshot["fix_obtained"]);
+		Assert.Equal(false, snapshot["gpsdRunning"]);
+		Assert.Equal(false, snapshot["fixObtained"]);
 	}
 
 	[Fact]
@@ -269,7 +269,7 @@ public sealed class GpsFixAccumulatorTests
 
 		var snapshot = acc.BuildSnapshot(gpsdRunning: true);
 
-		var knots = Assert.IsType<double>(snapshot["speed_knots"]);
+		var knots = Assert.IsType<double>(snapshot["speedKnots"]);
 		Assert.Equal(1.94384, knots, precision: 4);
 	}
 }

@@ -72,20 +72,20 @@ public sealed class GpsFixAccumulator
 
 		return new Dictionary<string, object?>
 		{
-			["gpsd_running"] = gpsdRunning,
-			["fix_obtained"] = FixObtained,
-			["fix_quality"] = (object?)(fix?.Mode ?? 0),
+			["gpsdRunning"] = gpsdRunning,
+			["fixObtained"] = FixObtained,
+			["fixQuality"] = (object?)(fix?.Mode ?? 0),
 			["latitude"] = fix?.Latitude,
 			["longitude"] = fix?.Longitude,
-			["altitude_m"] = fix?.AltitudeM,
-			["utc_time"] = fix?.UtcTime,
-			["satellites_used"] = sky?.SatellitesUsed ?? 0,
-			["satellites_visible"] = sky?.SatellitesVisible ?? 0,
+			["altitudeM"] = fix?.AltitudeM,
+			["utcTime"] = fix?.UtcTime,
+			["satellitesUsed"] = sky?.SatellitesUsed ?? 0,
+			["satellitesVisible"] = sky?.SatellitesVisible ?? 0,
 			["hdop"] = fix?.Hdop,
-			["max_snr_db"] = sky?.MaxSnrDb,
-			["min_snr_db"] = sky?.MinSnrDb,
-			["speed_knots"] = speedKnots,
-			["total_fix_updates"] = TotalFixUpdates
+			["maxSnrDb"] = sky?.MaxSnrDb,
+			["minSnrDb"] = sky?.MinSnrDb,
+			["speedKnots"] = speedKnots,
+			["totalFixUpdates"] = TotalFixUpdates
 		};
 	}
 }
