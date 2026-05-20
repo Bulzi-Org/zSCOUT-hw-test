@@ -3,7 +3,7 @@ services:
   # These services must be running before zscout-hw-test can probe peripherals.
 
   gps-svc:
-    image: ghcr.io/bulzi-org/zscout-gps-svc:latest
+    image: ghcr.io/bulzi-org/zscout-gps-svc:main
     container_name: zscout-gps-svc
     restart: unless-stopped
     network_mode: host # Exposes REST :5200 and gpsd :2947
@@ -17,7 +17,7 @@ services:
       start_period: 10s
 
   compass-svc:
-    image: ghcr.io/bulzi-org/zscout-compass-svc:latest
+    image: ghcr.io/bulzi-org/zscout-compass-svc:main
     container_name: zscout-compass-svc
     restart: unless-stopped
     network_mode: host # Exposes REST :5100
@@ -31,7 +31,7 @@ services:
       start_period: 10s
 
   sdr-svc:
-    image: ghcr.io/bulzi-org/zscout-sdr-svc:latest
+    image: ghcr.io/bulzi-org/zscout-sdr-svc:main
     container_name: zscout-sdr-svc
     restart: unless-stopped
     network_mode: host # Exposes REST :5101
@@ -48,7 +48,7 @@ services:
 
   # Main zSCOUT hardware test dashboard
   zscout-hw-test:
-    image: ghcr.io/bulzi-org/zscout-hw-test:latest
+    image: ghcr.io/bulzi-org/zscout-hw-test:main
     container_name: zscout-hw-test
     restart: unless-stopped
     depends_on:
