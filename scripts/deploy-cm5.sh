@@ -14,12 +14,26 @@
 #   ./deploy-cm5.sh
 #
 # What this script does:
-#   1. Creates /opt/zscout/hw-test/ deployment directory
-#   2. Downloads the latest docker-compose.yml from GitHub
-#   3. Pulls all container images (hw-test + gps-svc + compass-svc + sdr-svc)
-#   4. Starts all services with health-check ordering
-#   5. Waits for the dashboard to become healthy
-#   6. Prints the dashboard URL
+#   1. Authenticates to GHCR (GitHub Container Registry)
+#   2. Creates /opt/zscout/hw-test/ deployment directory
+#   3. Downloads the latest docker-compose.yml from GitHub
+#   4. Pulls all container images (hw-test + gps-svc + compass-svc + sdr-svc)
+#   5. Starts all services with health-check ordering
+#   6. Waits for the dashboard to become healthy
+#   7. Prints the dashboard URL
+#
+# GHCR Authentication:
+#   The container images are hosted on GitHub Container Registry and require
+#   authentication to pull. You need a GitHub Personal Access Token (PAT) with
+#   read:packages scope. Set it before running:
+#
+#     export GHCR_TOKEN="ghp_your_token_here"
+#     curl -fsSL https://raw.githubusercontent.com/Bulzi-Org/zSCOUT-hw-test/main/scripts/deploy-cm5.sh | bash
+#
+#   Or pass your GitHub username and token interactively (the script will prompt).
+#
+#   To create a PAT: https://github.com/settings/tokens → "Generate new token (classic)"
+#   → select "read:packages" scope.
 #
 # To update to the latest images later, re-run this script or:
 #   cd /opt/zscout/hw-test && docker compose pull && docker compose up -d
@@ -28,6 +42,7 @@
 DEPLOY_DIR="/opt/zscout/hw-test"
 COMPOSE_URL="https://raw.githubusercontent.com/Bulzi-Org/zSCOUT-hw-test/main/deploy/docker-compose.yml"
 DASHBOARD_PORT=5000
+GHCR_REGISTRY="ghcr.io"
 
 info()  { printf '\033[1;34m[INFO]\033[0m  %s\n' "$1"; }
 ok()    { printf '\033[1;32m[OK]\033[0m    %s\n' "$1"; }
@@ -55,6 +70,47 @@ if ! docker info &>/dev/null 2>&1; then
 fi
 
 info "Pre-flight checks passed"
+
+# ── GHCR Authentication ──────────────────────────────────────────────────────
+
+# Check if already logged in to GHCR
+if ! docker pull "${GHCR_REGISTRY}/bulzi-org/zscout-hw-test:latest" --quiet &>/dev/null 2>&1; then
+    info "GHCR authentication required"
+
+    if [ -n "${GHCR_TOKEN:-}" ]; then
+        # Token provided via environment variable
+        GHCR_USER="${GHCR_USER:-zscout-deploy}"
+        info "Logging in to GHCR with provided token..."
+        if ! echo "${GHCR_TOKEN}" | docker login "${GHCR_REGISTRY}" -u "${GHCR_USER}" --password-stdin 2>/dev/null; then
+            error "GHCR login failed. Check your token has read:packages scope."
+            exit 1
+        fi
+        ok "Logged in to GHCR"
+    else
+        # Prompt interactively
+        echo ""
+        echo "  The zSCOUT container images require GitHub authentication to pull."
+        echo "  You need a GitHub Personal Access Token (PAT) with read:packages scope."
+        echo "  Create one at: https://github.com/settings/tokens"
+        echo ""
+        read -rp "  GitHub username: " GHCR_USER
+        read -rsp "  Personal Access Token (read:packages): " GHCR_TOKEN
+        echo ""
+
+        if [ -z "${GHCR_USER}" ] || [ -z "${GHCR_TOKEN}" ]; then
+            error "Username and token are required."
+            exit 1
+        fi
+
+        if ! echo "${GHCR_TOKEN}" | docker login "${GHCR_REGISTRY}" -u "${GHCR_USER}" --password-stdin 2>/dev/null; then
+            error "GHCR login failed. Check your username and token."
+            exit 1
+        fi
+        ok "Logged in to GHCR"
+    fi
+else
+    ok "Already authenticated to GHCR"
+fi
 
 # ── Create deployment directory ───────────────────────────────────────────────
 
@@ -122,16 +178,16 @@ fi
 
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 echo ""
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  zSCOUT Hardware Test Suite — Deployed                      ║"
-echo "╠══════════════════════════════════════════════════════════════╣"
-echo "║                                                             ║"
-printf "║  Dashboard:  http://%-39s ║\n" "${IP:-localhost}:${DASHBOARD_PORT}"
-echo "║                                                             ║"
-echo "║  Useful commands:                                           ║"
-echo "║    Status:   docker compose -f ${DEPLOY_DIR}/docker-compose.yml ps    ║"
-echo "║    Logs:     docker compose -f ${DEPLOY_DIR}/docker-compose.yml logs   ║"
-echo "║    Stop:     docker compose -f ${DEPLOY_DIR}/docker-compose.yml down   ║"
-echo "║    Update:   re-run this script                             ║"
-echo "║                                                             ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║  zSCOUT Hardware Test Suite — Deployed                          ║"
+echo "╠══════════════════════════════════════════════════════════════════╣"
+echo "║                                                                 ║"
+printf "║  Dashboard:  http://%-43s ║\n" "${IP:-localhost}:${DASHBOARD_PORT}"
+echo "║                                                                 ║"
+echo "║  Useful commands:                                               ║"
+echo "║    Status:  cd ${DEPLOY_DIR} && docker compose ps               ║"
+echo "║    Logs:    cd ${DEPLOY_DIR} && docker compose logs             ║"
+echo "║    Stop:    cd ${DEPLOY_DIR} && docker compose down             ║"
+echo "║    Update:  re-run this script                                  ║"
+echo "║                                                                 ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
