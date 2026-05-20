@@ -54,9 +54,9 @@ public sealed class SdrAdapter : IHardwareAdapter
 			using var statusDoc = await JsonDocument.ParseAsync(await statusResponse.Content.ReadAsStreamAsync(statusCts.Token), cancellationToken: statusCts.Token);
 			var statusRoot = statusDoc.RootElement;
 
-			var available = statusRoot.TryGetProperty("device_found", out var availEl) && availEl.GetBoolean();
-			var driverInfo = statusRoot.TryGetProperty("driver_info", out var drvEl) ? drvEl.GetString() ?? "" : "";
-			var probeOk = statusRoot.TryGetProperty("probe_ok", out var probeEl) && probeEl.GetBoolean();
+			var available = statusRoot.TryGetProperty("deviceFound", out var availEl) && availEl.GetBoolean();
+			var driverInfo = statusRoot.TryGetProperty("driverInfo", out var drvEl) ? drvEl.GetString() ?? "" : "";
+			var probeOk = statusRoot.TryGetProperty("probeOk", out var probeEl) && probeEl.GetBoolean();
 			var statusMessage = statusRoot.TryGetProperty("status", out var msgEl) ? msgEl.GetString() ?? "" : "";
 
 			if (reportStep is not null)
@@ -99,14 +99,14 @@ public sealed class SdrAdapter : IHardwareAdapter
 
 			var minFreqHz = 0.0;
 			var maxFreqHz = 0.0;
-			if (capsRoot.TryGetProperty("rx_freq_range_hz", out var rxFreqEl) && rxFreqEl.ValueKind == JsonValueKind.Object)
+			if (capsRoot.TryGetProperty("rxFreqRangeHz", out var rxFreqEl) && rxFreqEl.ValueKind == JsonValueKind.Object)
 			{
 				minFreqHz = rxFreqEl.TryGetProperty("min", out var minFEl) ? minFEl.GetDouble() : 0.0;
 				maxFreqHz = rxFreqEl.TryGetProperty("max", out var maxFEl) ? maxFEl.GetDouble() : 0.0;
 			}
 			var minGainDb = 0.0;
 			var maxGainDb = 0.0;
-			if (capsRoot.TryGetProperty("rx_gains", out var gainsEl) && gainsEl.ValueKind == JsonValueKind.Object)
+			if (capsRoot.TryGetProperty("rxGains", out var gainsEl) && gainsEl.ValueKind == JsonValueKind.Object)
 			{
 				foreach (var gain in gainsEl.EnumerateObject())
 				{
@@ -188,8 +188,8 @@ public sealed class SdrAdapter : IHardwareAdapter
 			response.EnsureSuccessStatusCode();
 			using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cts.Token), cancellationToken: cts.Token);
 			var root = doc.RootElement;
-			var drv = root.TryGetProperty("driver_info", out var drvEl) ? drvEl.GetString() ?? "" : "";
-			var avail = root.TryGetProperty("device_found", out var availEl) && availEl.GetBoolean();
+			var drv = root.TryGetProperty("driverInfo", out var drvEl) ? drvEl.GetString() ?? "" : "";
+			var avail = root.TryGetProperty("deviceFound", out var availEl) && availEl.GetBoolean();
 			return $"driver_info={drv} device_found={avail}";
 		}
 		catch
