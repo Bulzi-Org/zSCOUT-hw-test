@@ -1,7 +1,6 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
-using Grpc.Net.Client;
 using ZScout.HwTest.App.Hardware.Common;
-using ZScout.HwTest.App.Protos;
 using ZScout.HwTest.Contracts.Models;
 
 namespace ZScout.HwTest.App.Hardware.Halow;
@@ -16,9 +15,9 @@ namespace ZScout.HwTest.App.Hardware.Halow;
 ///   <item><description>Layer 2 — Wireless interface via <c>iw dev</c> / <c>iw phy</c></description></item>
 ///   <item><description>Layer 3 — Optional <c>morse_cli</c> radio health check</description></item>
 /// </list>
-/// <para>Tier B — Mesh Connectivity (Layer 4+, requires zSCOUT-mesh gRPC :5102):</para>
+/// <para>Tier B — Mesh Connectivity (Layer 4+, requires zSCOUT-mesh REST :5102):</para>
 /// <list type="bullet">
-///   <item><description>Mesh association, peer count, gateway mode via gRPC</description></item>
+///   <item><description>Mesh association, peer count, gateway mode via HTTP REST</description></item>
 ///   <item><description>Internet reachability through bat0 interface</description></item>
 /// </list>
 /// Tier A requires only read-only /sys and --network host (no --privileged).
@@ -36,6 +35,7 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 
 	private readonly ILogger<HalowAdapter> _logger;
 	private readonly IConfiguration _config;
+	private readonly IHttpClientFactory _httpClientFactory;
 
 	/// <summary>
 	/// Caches the most recently discovered HaLow wireless interface name
@@ -43,10 +43,11 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 	/// </summary>
 	private volatile string? _lastDiscoveredInterface;
 
-	public HalowAdapter(ILogger<HalowAdapter> logger, IConfiguration config)
+	public HalowAdapter(ILogger<HalowAdapter> logger, IConfiguration config, IHttpClientFactory httpClientFactory)
 	{
 		_logger = logger;
 		_config = config;
+		_httpClientFactory = httpClientFactory;
 	}
 
 	/// <inheritdoc />
@@ -327,7 +328,7 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 	}
 
 	/// <summary>
-	/// Tier B: Attempt gRPC connection to zSCOUT-mesh service for mesh health data.
+	/// Tier B: Attempt HTTP REST connection to zSCOUT-mesh service for mesh health data.
 	/// If mesh service is unavailable, reports NotTested without failure (FR-011).
 	/// </summary>
 	private async Task ProbeMeshAsync(
@@ -340,16 +341,68 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		var port = int.TryParse(_config["Peripherals:Halow:MeshPort"], out var p) ? p : 5102;
 		var timeoutMs = int.TryParse(_config["Peripherals:Halow:MeshTimeoutMs"], out var t) ? t : 5_000;
 
-		// Check if mesh service is reachable
-		var reachable = await TcpHealthCheck.CheckAsync(host, port, timeoutMs, ct);
-		if (reportStep is not null)
-			await reportStep($"TCP connect {host}:{port}", reachable ? "mesh service connected" : "mesh service unreachable", !reachable);
+		// Check mesh service via REST status endpoint
+		var client = _httpClientFactory.CreateClient("MeshSvc");
+		client.BaseAddress = new Uri($"http://{host}:{port}");
+		client.Timeout = TimeSpan.FromMilliseconds(timeoutMs);
 
-		snapshot["mesh_service_available"] = reachable;
-
-		if (!reachable)
+		try
 		{
-			// Mesh not available — report NotTested, not a failure (FR-011)
+			using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+			statusCts.CancelAfter(timeoutMs);
+			using var response = await client.GetAsync("/api/status", statusCts.Token);
+
+			if (!response.IsSuccessStatusCode)
+			{
+				if (reportStep is not null)
+					await reportStep($"GET http://{host}:{port}/api/status", $"HTTP {(int)response.StatusCode}", true);
+
+				snapshot["mesh_service_available"] = false;
+				snapshot["mesh_associated"] = null;
+				snapshot["peer_count"] = null;
+				snapshot["gateway_mode"] = null;
+				snapshot["bat0_ip"] = null;
+				snapshot["internet_reachable"] = null;
+				messages.Add($"Tier B: mesh service returned HTTP {(int)response.StatusCode} on {host}:{port} — mesh tests skipped");
+				return;
+			}
+
+			snapshot["mesh_service_available"] = true;
+
+			using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(statusCts.Token), cancellationToken: statusCts.Token);
+			var root = doc.RootElement;
+
+			var associated = root.TryGetProperty("associated", out var assocEl) && assocEl.GetBoolean();
+			var peerCount = root.TryGetProperty("peerCount", out var pcEl) ? pcEl.GetInt32() : 0;
+			var gatewayMode = root.TryGetProperty("gatewayMode", out var gwEl) ? gwEl.GetString() ?? "" : "";
+			var bat0Ip = root.TryGetProperty("bat0Ip", out var batEl) ? batEl.GetString() ?? "" : "";
+			var internetReachable = root.TryGetProperty("internetReachable", out var inetEl) && inetEl.GetBoolean();
+			var meshStatusMessage = root.TryGetProperty("statusMessage", out var msmEl) ? msmEl.GetString() ?? "" : "";
+
+			if (reportStep is not null)
+				await reportStep("GET /api/status",
+					$"associated={associated} peers={peerCount} gw={gatewayMode} inet={internetReachable}",
+					!associated);
+
+			snapshot["mesh_associated"] = associated;
+			snapshot["peer_count"] = peerCount;
+			snapshot["gateway_mode"] = gatewayMode;
+			snapshot["bat0_ip"] = bat0Ip;
+			snapshot["internet_reachable"] = internetReachable;
+
+			var tierBSummary = associated
+				? $"Tier B PASS: mesh associated, {peerCount} peers, gw={gatewayMode}, bat0={bat0Ip}, inet={internetReachable}"
+				: $"Tier B: mesh not associated — {meshStatusMessage}";
+			messages.Add(tierBSummary);
+			_logger.LogInformation("HaLow Tier B: associated={Associated} peers={PeerCount}", associated, peerCount);
+		}
+		catch (Exception ex) when (ex is not OperationCanceledException)
+		{
+			if (reportStep is not null)
+				await reportStep($"GET http://{host}:{port}/api/status", $"unreachable: {ex.GetType().Name}", true);
+
+			_logger.LogWarning(ex, "HaLow probe: REST call to mesh service failed");
+			snapshot["mesh_service_available"] = false;
 			snapshot["mesh_associated"] = null;
 			snapshot["peer_count"] = null;
 			snapshot["gateway_mode"] = null;
@@ -357,44 +410,6 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 			snapshot["internet_reachable"] = null;
 			messages.Add($"Tier B: mesh service not available on {host}:{port} — mesh tests skipped (NotTested)");
 			_logger.LogInformation("HaLow probe: mesh service not available on {Host}:{Port} — Tier B skipped", host, port);
-			return;
-		}
-
-		// Query mesh service via gRPC
-		using var channel = GrpcChannelFactory.Create(host, port);
-		var client = new MeshService.MeshServiceClient(channel);
-
-		try
-		{
-			using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-			statusCts.CancelAfter(timeoutMs);
-			var meshStatus = await client.GetStatusAsync(new MeshStatusRequest(), cancellationToken: statusCts.Token);
-			if (reportStep is not null)
-				await reportStep("MeshService.GetStatus",
-					$"associated={meshStatus.Associated} peers={meshStatus.PeerCount} gw={meshStatus.GatewayMode} inet={meshStatus.InternetReachable}",
-					!meshStatus.Associated);
-
-			snapshot["mesh_associated"] = meshStatus.Associated;
-			snapshot["peer_count"] = meshStatus.PeerCount;
-			snapshot["gateway_mode"] = meshStatus.GatewayMode;
-			snapshot["bat0_ip"] = meshStatus.Bat0Ip;
-			snapshot["internet_reachable"] = meshStatus.InternetReachable;
-
-			var tierBSummary = meshStatus.Associated
-				? $"Tier B PASS: mesh associated, {meshStatus.PeerCount} peers, gw={meshStatus.GatewayMode}, bat0={meshStatus.Bat0Ip}, inet={meshStatus.InternetReachable}"
-				: $"Tier B: mesh not associated — {meshStatus.StatusMessage}";
-			messages.Add(tierBSummary);
-			_logger.LogInformation("HaLow Tier B: associated={Associated} peers={PeerCount}", meshStatus.Associated, meshStatus.PeerCount);
-		}
-		catch (Exception ex) when (ex is not OperationCanceledException)
-		{
-			_logger.LogWarning(ex, "HaLow probe: gRPC call to mesh service failed");
-			snapshot["mesh_associated"] = null;
-			snapshot["peer_count"] = null;
-			snapshot["gateway_mode"] = null;
-			snapshot["bat0_ip"] = null;
-			snapshot["internet_reachable"] = null;
-			messages.Add($"Tier B: gRPC error — {ex.GetType().Name}: {ex.Message}");
 		}
 	}
 

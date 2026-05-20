@@ -1,12 +1,14 @@
+using System.Text.Json;
 using ZScout.HwTest.App.Hardware.Common;
 using ZScout.HwTest.Contracts.Models;
 
 namespace ZScout.HwTest.App.Hardware.Gps;
 
 /// <summary>
-/// GPS adapter: probes the MicoAir MG-A01 via gps-svc TCP connection.
-/// Connects to gps-svc on configurable host:port (default localhost:2947) instead of
-/// checking for a host gpsd process (which fails in container PID namespaces — #23 Bug 1).
+/// GPS adapter: probes the MicoAir MG-A01 via gps-svc REST API and gpspipe streaming.
+/// Connects to gps-svc on configurable host:port (default localhost:5200 for REST status,
+/// localhost:2947 for gpsd TCP streaming) instead of checking for a host gpsd process
+/// (which fails in container PID namespaces — #23 Bug 1).
 /// Streams live GNSS fix data from <c>gpspipe -w</c> (JSON mode) until the run is stopped
 /// or the CancellationToken is cancelled. Returns PASS (Ready) if a complete fix was obtained,
 /// FAIL (Degraded) if gps-svc ran but no qualifying fix arrived, or Unavailable if gps-svc is absent.
@@ -19,18 +21,20 @@ public sealed class GpsAdapter : IHardwareAdapter
 
 	private readonly ILogger<GpsAdapter> _logger;
 	private readonly IConfiguration _config;
+	private readonly IHttpClientFactory _httpClientFactory;
 
-	public GpsAdapter(ILogger<GpsAdapter> logger, IConfiguration config)
+	public GpsAdapter(ILogger<GpsAdapter> logger, IConfiguration config, IHttpClientFactory httpClientFactory)
 	{
 		_logger = logger;
 		_config = config;
+		_httpClientFactory = httpClientFactory;
 	}
 
 	/// <summary>
 	/// Streams live GNSS fix data until <paramref name="ct"/> is cancelled (operator Stop)
 	/// or the gpspipe process exits. Each parsed fix update is published via
 	/// <paramref name="reportStep"/> for live dashboard display.
-	/// Connects to gps-svc via TCP (FR-001, FR-002) instead of host process check.
+	/// Checks gps-svc availability via REST (FR-001, FR-002), then streams via gpspipe.
 	/// </summary>
 	public async Task<DiagnosticEnvelope> ProbeAsync(
 		RunMode mode,
@@ -42,21 +46,45 @@ public sealed class GpsAdapter : IHardwareAdapter
 		// Resolve gps-svc endpoint from configuration (FR-001, FR-013)
 		var host = _config["Peripherals:Gps:Host"] ?? "localhost";
 		var port = int.TryParse(_config["Peripherals:Gps:Port"], out var p) ? p : 2947;
+		var restPort = int.TryParse(_config["Peripherals:Gps:RestPort"], out var rp) ? rp : 5200;
 		var timeoutMs = int.TryParse(_config["Peripherals:Gps:TimeoutMs"], out var t) ? t : 5_000;
 
-		// Step 1: TCP connectivity check to gps-svc (FR-002, fixes #23 Bug 1)
-		var reachable = await TcpHealthCheck.CheckAsync(host, port, timeoutMs, ct);
-		if (reportStep is not null)
-			await reportStep($"TCP connect {host}:{port}", reachable ? "connected" : "unreachable", !reachable);
+		// Step 1: Check gps-svc availability via REST status endpoint (FR-002)
+		var reachable = false;
+		try
+		{
+			var client = _httpClientFactory.CreateClient("GpsSvc");
+			client.BaseAddress = new Uri($"http://{host}:{restPort}");
+			client.Timeout = TimeSpan.FromMilliseconds(timeoutMs);
+			using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+			statusCts.CancelAfter(timeoutMs);
+			using var statusResponse = await client.GetAsync("/api/status", statusCts.Token);
+			reachable = statusResponse.IsSuccessStatusCode;
+			if (reportStep is not null)
+				await reportStep($"GET http://{host}:{restPort}/api/status", reachable ? "ok" : $"HTTP {(int)statusResponse.StatusCode}", !reachable);
+		}
+		catch (Exception ex) when (ex is not OperationCanceledException)
+		{
+			if (reportStep is not null)
+				await reportStep($"GET http://{host}:{restPort}/api/status", $"unreachable: {ex.GetType().Name}", true);
+		}
 
 		if (!reachable)
 		{
-			_logger.LogWarning("GPS probe: gps-svc not reachable on {Host}:{Port}", host, port);
-			return DiagnosticEnvelope.Unavailable(PeripheralId, $"gps-svc not reachable on {host}:{port}");
+			// Fallback: try TCP connectivity to gpsd port (T024)
+			reachable = await TcpHealthCheck.CheckAsync(host, port, timeoutMs, ct);
+			if (reportStep is not null)
+				await reportStep($"TCP connect {host}:{port}", reachable ? "connected" : "unreachable", !reachable);
 		}
 
-		messages.Add($"gps-svc reachable on {host}:{port}; starting live GNSS fix stream");
-		_logger.LogInformation("GPS probe: gps-svc reachable on {Host}:{Port}; starting gpspipe -w stream", host, port);
+		if (!reachable)
+		{
+			_logger.LogWarning("GPS probe: gps-svc not reachable on {Host}:{Port}", host, restPort);
+			return DiagnosticEnvelope.Unavailable(PeripheralId, $"gps-svc not reachable on {host}:{restPort}");
+		}
+
+		messages.Add($"gps-svc reachable on {host}:{restPort}; starting live GNSS fix stream");
+		_logger.LogInformation("GPS probe: gps-svc reachable on {Host}:{Port}; starting gpspipe -w stream", host, restPort);
 
 		// Step 2: Stream gpspipe -w JSON output until ct is cancelled (FR-003)
 		// Connect gpspipe to gps-svc host explicitly
