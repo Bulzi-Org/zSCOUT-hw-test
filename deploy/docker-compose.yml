@@ -31,7 +31,7 @@ services:
       start_period: 10s
 
   sdr-svc:
-    image: ghcr.io/bulzi-org/zscout-sdr-svc:main
+    image: ghcr.io/bulzi-org/zscout-sdr-svc:latest
     container_name: zscout-sdr-svc
     restart: unless-stopped
     network_mode: host # Exposes REST :5101
