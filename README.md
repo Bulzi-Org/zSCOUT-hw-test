@@ -13,33 +13,69 @@ communicated with from Docker containers running on the zSCOUT base image.
 | Morse Micro MM8108 Wi-Fi HaLow | PCIe → morse_driver | `lsmod`, `ip link` |
 | QMC5883L compass | I²C (0x0d) | `i2cdetect`, `i2cget` |
 
-## Quick start (CM5, online)
+## Deploy to CM5 hardware
+
+SSH into your CM5 running the zSCOUT base image and run this single command to
+pull and start all services (hw-test dashboard + GPS, compass, and SDR services):
 
 ```bash
-# Pull the image from GHCR
-docker pull ghcr.io/bulzi-org/zscout-hw-test:latest
-
-# Run the dashboard (host networking required for hardware access)
-docker run --rm \
-  --privileged \
-  --network host \
-  -v /dev:/dev:ro \
-  -v /sys:/sys:ro \
-  -v "$(pwd)/data:/app/data" \
-  ghcr.io/bulzi-org/zscout-hw-test:latest
+curl -fsSL https://raw.githubusercontent.com/Bulzi-Org/zSCOUT-hw-test/main/scripts/deploy-cm5.sh | bash
 ```
+
+This will:
+1. Create `/opt/zscout/hw-test/` with the docker-compose configuration
+2. Pull all four container images from GHCR (arm64)
+3. Start Tier 2 services (gps-svc, compass-svc, sdr-svc) with health checks
+4. Start the hw-test dashboard once all dependencies are healthy
+5. Print the dashboard URL
 
 Browse to `http://<cm5-ip>:5000` to access the dashboard.
 
-## Quick start (docker compose)
+### Manual step-by-step
+
+If you prefer to run each step individually:
 
 ```bash
-cd deploy/
-docker compose up
+# 1. Create deployment directory
+sudo mkdir -p /opt/zscout/hw-test/{data,logs}
+
+# 2. Download the compose file
+curl -fsSL -o /opt/zscout/hw-test/docker-compose.yml \
+  https://raw.githubusercontent.com/Bulzi-Org/zSCOUT-hw-test/main/deploy/docker-compose.yml
+
+# 3. Pull all images
+docker compose -f /opt/zscout/hw-test/docker-compose.yml pull
+
+# 4. Start all services
+docker compose -f /opt/zscout/hw-test/docker-compose.yml up -d
+
+# 5. Check status
+docker compose -f /opt/zscout/hw-test/docker-compose.yml ps
 ```
 
-See [deploy/README.md](deploy/README.md) for full deployment options including
-offline (air-gapped) operation and SD-card bake-in.
+### Update to latest
+
+```bash
+# Re-run the deploy script (pulls latest images and restarts)
+curl -fsSL https://raw.githubusercontent.com/Bulzi-Org/zSCOUT-hw-test/main/scripts/deploy-cm5.sh | bash
+
+# Or manually:
+docker compose -f /opt/zscout/hw-test/docker-compose.yml pull
+docker compose -f /opt/zscout/hw-test/docker-compose.yml up -d
+```
+
+### Service architecture
+
+```
+CM5 (host network)
+├── gps-svc        :5200 REST + :2947 gpsd   /dev/ttyUSB0
+├── compass-svc    :5100 REST                /dev/i2c-1
+├── sdr-svc        :5101 REST                /dev/bus/usb
+└── zscout-hw-test :5000 dashboard + API     (depends on all above)
+```
+
+See [deploy/README.md](deploy/README.md) for offline (air-gapped) operation and
+SD-card bake-in options.
 
 ## CLI (headless / CI)
 
