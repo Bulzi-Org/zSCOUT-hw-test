@@ -55,6 +55,7 @@ builder.Services.AddSingleton<VerdictService>();
 // ── SignalR & Live Events ────────────────────────────────────────────────────
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<LiveEventPublisher>();
+builder.Services.AddSingleton<NmeaStreamService>();
 
 // ── Dashboard (Blazor Server) ─────────────────────────────────────────────────
 builder.Services.AddRazorComponents()
