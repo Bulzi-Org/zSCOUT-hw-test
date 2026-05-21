@@ -100,3 +100,13 @@ A backend hosted service connects to the gps-svc SSE endpoint (`GET /api/stream/
 - The `GpsFix` record does not include a `vdop` field; VDOP display will show "--" unless the model is extended or the field is available in the JSON.
 - The existing SignalR infrastructure (`HardwareStatusHub`, `LiveEventPublisher`) can be extended with new event types without breaking existing functionality.
 - The NMEA panel (issue #36) may or may not be implemented yet; this feature uses the same pattern but is independent.
+
+## Clarifications
+
+### Session 2026-05-21
+
+- Q: Should the hosted service run continuously from app startup, or only when clients are connected? → A: Continuously from app startup — the SSE connection is maintained independently of client connections so the latest fix is immediately available when a client connects.
+- Q: What reconnection backoff strategy should the hosted service use when gps-svc is unreachable? → A: Exponential backoff starting at 2 seconds, capped at 30 seconds, with jitter. Standard resilience pattern matching existing adapter timeout behavior.
+- Q: Should the GpsFixStreamPanel appear at the top of the Streams page above the existing run-based telemetry, or in a separate tab? → A: At the top of the Streams page above the existing run selector, as a standalone card section. This makes it always visible without navigation changes.
+- Q: How should the VDOP field be handled since it's not in the current GpsFix model? → A: Display "--" placeholder for VDOP. The field will be shown in the panel layout but will not have data until the GpsFix model is extended in a future PR.
+- Q: Should the panel use the LiveEventPublisher .NET event pattern or subscribe directly to SignalR hub events? → A: Use the LiveEventPublisher .NET event pattern for Blazor Server components (same pattern as Control.razor subscribes to RunStatusChanged), since Blazor Server components run in-process and don't need a JS SignalR connection.
