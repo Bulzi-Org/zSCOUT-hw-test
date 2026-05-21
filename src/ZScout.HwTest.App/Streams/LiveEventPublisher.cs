@@ -7,6 +7,8 @@ namespace ZScout.HwTest.App.Streams;
 public sealed record RunStatusEventArgs(string RunId, RunStatus Status);
 public sealed record PeripheralStatusEventArgs(string RunId, PeripheralId PeripheralId, PeripheralStatus Status);
 public sealed record CommandProgressEventArgs(string RunId, PeripheralId PeripheralId, string Command, string Output, bool IsError, DateTimeOffset TimestampUtc);
+public sealed record NmeaSentenceEventArgs(string Sentence, DateTimeOffset TimestampUtc);
+public sealed record NmeaConnectionStateEventArgs(bool Connected);
 
 /// <summary>
 /// Publishes live events to all connected SignalR clients AND raises .NET events
@@ -20,6 +22,8 @@ public class LiveEventPublisher
 	public event EventHandler<RunStatusEventArgs>? RunStatusChanged;
 	public event EventHandler<PeripheralStatusEventArgs>? PeripheralStatusChanged;
 	public event EventHandler<CommandProgressEventArgs>? CommandProgressReceived;
+	public event EventHandler<NmeaSentenceEventArgs>? NmeaSentenceReceived;
+	public event EventHandler<NmeaConnectionStateEventArgs>? NmeaConnectionStateChanged;
 
 	/// <summary>Raises <see cref="CommandProgressReceived"/>; callable from derived classes.</summary>
 	protected void RaiseCommandProgressReceived(CommandProgressEventArgs args)
@@ -68,4 +72,16 @@ public class LiveEventPublisher
 			HubEvents.TelemetrySample,
 			new { runId, peripheralId = peripheralId.ToString(), sample },
 			ct);
+
+	/// <summary>
+	/// Publishes a single NMEA sentence for live diagnostic display.
+	/// </summary>
+	public virtual void PublishNmeaSentence(string sentence)
+		=> NmeaSentenceReceived?.Invoke(this, new NmeaSentenceEventArgs(sentence, DateTimeOffset.UtcNow));
+
+	/// <summary>
+	/// Publishes an NMEA SSE connection state change.
+	/// </summary>
+	public virtual void PublishNmeaConnectionState(bool connected)
+		=> NmeaConnectionStateChanged?.Invoke(this, new NmeaConnectionStateEventArgs(connected));
 }

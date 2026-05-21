@@ -23,4 +23,8 @@ public sealed class NullLiveEventPublisher : LiveEventPublisher
 	public override Task PublishCommandProgressAsync(
 		string runId, PeripheralId peripheralId, string command, string output, bool isError, CancellationToken ct = default)
 		=> Task.CompletedTask;
+
+	public override void PublishNmeaSentence(string sentence) { }
+
+	public override void PublishNmeaConnectionState(bool connected) { }
 }
