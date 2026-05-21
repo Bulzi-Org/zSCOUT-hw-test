@@ -86,3 +86,13 @@ The operator can clear the displayed NMEA output and copy it to the clipboard. T
 - The NMEA SSE endpoint uses standard SSE format (lines prefixed with `data:`).
 - The default buffer cap of 200 lines is sufficient for typical diagnostic sessions.
 - The panel is an additional nav item or section in the existing Streams page, consistent with dashboard navigation patterns.
+
+## Clarifications
+
+### Session 2026-05-21
+
+No critical ambiguities detected. All functional requirements, acceptance criteria, and edge cases are sufficiently specified for planning. The following decisions were made using best judgment:
+
+- Panel placement: Added as a new nav item "NMEA Diagnostics" in the sidebar, keeping the existing Streams page for run-based telemetry.
+- Auto-reconnect: Not included in v1 scope — the operator must manually re-navigate or refresh to reconnect. A Reconnect button may be added later.
+- Buffer default: 200 lines (configurable via appsettings) — consistent with the issue description.
