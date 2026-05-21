@@ -28,9 +28,10 @@ WORKDIR /app
 
 # Install hardware diagnostic tools needed at runtime
 # Note: i2c-tools removed — compass now uses compass-svc REST API (FR-004)
-# Kept: gpsd-clients (GPS streaming), iw/usbutils/kmod (HaLow Tier A), pciutils
+# Note: gpsd-clients removed — GPS now uses gps-svc REST API (#35)
+# Kept: iw/usbutils/kmod (HaLow Tier A), pciutils
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl gpsd-clients iw usbutils kmod pciutils && \
+    curl iw usbutils kmod pciutils && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy published application from build stage
