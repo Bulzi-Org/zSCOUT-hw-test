@@ -1,0 +1,173 @@
+@using ZScout.HwTest.App.Hardware.Gps
+@using ZScout.HwTest.App.Streams
+@inject LiveEventPublisher LiveEvents
+@implements IDisposable
+
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h6 class="card-title mb-0">
+                <span class="icon">&#128225;</span> Live GPS Fix
+            </h6>
+            <span class="badge @StatusBadgeClass">@StatusText</span>
+        </div>
+
+        <div class="row g-2 font-monospace" style="font-size:0.85rem">
+            <div class="col-md-6 col-lg-4">
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">Fix Mode</span>
+                    <span>@FixModeText</span>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">Latitude</span>
+                    <span>@FormatDouble(_fix?.Latitude, "F6", "°")</span>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">Longitude</span>
+                    <span>@FormatDouble(_fix?.Longitude, "F6", "°")</span>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">Altitude</span>
+                    <span>@FormatDouble(_fix?.AltitudeM, "F1", " m MSL")</span>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">Speed</span>
+                    <span>@FormatDouble(_fix?.SpeedMs, "F1", " m/s")</span>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">Track</span>
+                    <span>@FormatDouble(_fix?.Track, "F1", "°")</span>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">HDOP</span>
+                    <span>@FormatDouble(_fix?.Hdop, "F1")</span>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">VDOP</span>
+                    <span>--</span>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">Fix Time (UTC)</span>
+                    <span>@(_fix?.UtcTime ?? "--")</span>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">Sats Used / Visible</span>
+                    <span>@SatsText</span>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">Max SNR</span>
+                    <span>@FormatInt(_fix?.MaxSnrDb, " dBHz")</span>
+                </div>
+            </div>
+            <div class="col-md-6 col-lg-4">
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">Min SNR</span>
+                    <span>@FormatInt(_fix?.MinSnrDb, " dBHz")</span>
+                </div>
+            </div>
+            <div class="col-12">
+                <div class="d-flex justify-content-between py-1">
+                    <span class="text-muted">Last Updated</span>
+                    <span class="@(_fix is null ? "text-muted" : "")">@LastUpdatedText</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private GpsFix? _fix;
+    private DateTimeOffset? _lastReceivedUtc;
+    private Timer? _refreshTimer;
+
+    protected override void OnInitialized()
+    {
+        LiveEvents.GpsFixReceived += OnGpsFixReceived;
+        _refreshTimer = new Timer(OnRefreshTimer, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    private void OnGpsFixReceived(object? sender, GpsFixEventArgs e)
+    {
+        _fix = e.Fix;
+        _lastReceivedUtc = e.ReceivedAtUtc;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void OnRefreshTimer(object? state)
+    {
+        // Only re-render if we have data (to update relative time)
+        if (_lastReceivedUtc.HasValue)
+            _ = InvokeAsync(StateHasChanged);
+    }
+
+    private string StatusText => _fix switch
+    {
+        null => "UNAVAILABLE",
+        { HasQualifyingFix: true } => "HEALTHY",
+        _ => "DEGRADED"
+    };
+
+    private string StatusBadgeClass => _fix switch
+    {
+        null => "bg-secondary",
+        { HasQualifyingFix: true } => "bg-success",
+        _ => "bg-warning text-dark"
+    };
+
+    private string FixModeText => _fix?.Mode switch
+    {
+        3 => "3D",
+        2 => "2D",
+        1 => "NoFix",
+        _ => "--"
+    };
+
+    private string SatsText => _fix is not null
+        ? $"{_fix.SatellitesUsed}/{_fix.SatellitesVisible}"
+        : "--";
+
+    private string LastUpdatedText
+    {
+        get
+        {
+            if (_lastReceivedUtc is null) return "--";
+            var elapsed = DateTimeOffset.UtcNow - _lastReceivedUtc.Value;
+            return elapsed.TotalSeconds < 1 ? "< 1 s ago"
+                : elapsed.TotalSeconds < 60 ? $"{elapsed.TotalSeconds:F1} s ago"
+                : elapsed.TotalMinutes < 60 ? $"{elapsed.TotalMinutes:F0} min ago"
+                : $"{elapsed.TotalHours:F0} hr ago";
+        }
+    }
+
+    private static string FormatDouble(double? value, string format, string suffix = "")
+        => value.HasValue ? $"{value.Value.ToString(format)}{suffix}" : "--";
+
+    private static string FormatInt(int? value, string suffix = "")
+        => value.HasValue ? $"{value.Value}{suffix}" : "--";
+
+    public void Dispose()
+    {
+        LiveEvents.GpsFixReceived -= OnGpsFixReceived;
+        _refreshTimer?.Dispose();
+    }
+}

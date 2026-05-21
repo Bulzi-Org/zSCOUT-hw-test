@@ -25,4 +25,5 @@ public static class HubEvents
 	public const string PeripheralStatusChanged = "PeripheralStatusChanged";
 	public const string CommandProgress = "CommandProgress";
 	public const string TelemetrySample = "TelemetrySample";
+	public const string GpsFixReceived = "GpsFixReceived";
 }

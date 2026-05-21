@@ -27,4 +27,6 @@ public sealed class NullLiveEventPublisher : LiveEventPublisher
 	public override void PublishNmeaSentence(string sentence) { }
 
 	public override void PublishNmeaConnectionState(bool connected) { }
+	public override Task PublishGpsFixAsync(Hardware.Gps.GpsFix fix, CancellationToken ct = default)
+		=> Task.CompletedTask;
 }

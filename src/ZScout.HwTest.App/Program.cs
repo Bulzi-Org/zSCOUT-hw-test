@@ -56,6 +56,7 @@ builder.Services.AddSingleton<VerdictService>();
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<LiveEventPublisher>();
 builder.Services.AddSingleton<NmeaStreamService>();
+builder.Services.AddHostedService<GpsFixStreamService>();
 
 // ── Dashboard (Blazor Server) ─────────────────────────────────────────────────
 builder.Services.AddRazorComponents()
