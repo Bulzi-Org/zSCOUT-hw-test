@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using System.Text.Json;
 using ZScout.HwTest.App.Hardware.Common;
 using ZScout.HwTest.Contracts.Models;
@@ -5,19 +6,25 @@ using ZScout.HwTest.Contracts.Models;
 namespace ZScout.HwTest.App.Hardware.Gps;
 
 /// <summary>
-/// GPS adapter: probes the MicoAir MG-A01 via gps-svc REST API and gpspipe streaming.
-/// Connects to gps-svc on configurable host:port (default localhost:5200 for REST status,
-/// localhost:2947 for gpsd TCP streaming) instead of checking for a host gpsd process
-/// (which fails in container PID namespaces — #23 Bug 1).
-/// Streams live GNSS fix data from <c>gpspipe -w</c> (JSON mode) until the run is stopped
-/// or the CancellationToken is cancelled. Returns PASS (Ready) if a complete fix was obtained,
-/// FAIL (Degraded) if gps-svc ran but no qualifying fix arrived, or Unavailable if gps-svc is absent.
+/// GPS adapter: probes the MicoAir MG-A01 via gps-svc REST API.
+/// Connects to gps-svc on configurable host:restPort (default localhost:5200).
+/// Step 1 — Availability: GET /api/fix returns the current fix snapshot.
+/// Step 2 — Streaming: GET /api/stream/fixes (SSE) streams live GpsFix JSON
+/// until the CancellationToken is cancelled (operator Stop).
+/// Returns PASS (Ready) if a qualifying fix was obtained,
+/// FAIL (Degraded) if gps-svc ran but no qualifying fix arrived,
+/// or Unavailable if gps-svc is absent.
 /// T016: Streaming probe with fix-based verdict and 14-field HealthSnapshot.
 /// T024: Unavailable returned immediately when gps-svc is not reachable; other adapters not blocked.
 /// </summary>
 public sealed class GpsAdapter : IHardwareAdapter
 {
 	public PeripheralId PeripheralId => PeripheralId.Gps;
+
+	private static readonly JsonSerializerOptions JsonOptions = new()
+	{
+		PropertyNameCaseInsensitive = true
+	};
 
 	private readonly ILogger<GpsAdapter> _logger;
 	private readonly IConfiguration _config;
@@ -31,10 +38,9 @@ public sealed class GpsAdapter : IHardwareAdapter
 	}
 
 	/// <summary>
-	/// Streams live GNSS fix data until <paramref name="ct"/> is cancelled (operator Stop)
-	/// or the gpspipe process exits. Each parsed fix update is published via
-	/// <paramref name="reportStep"/> for live dashboard display.
-	/// Checks gps-svc availability via REST (FR-001, FR-002), then streams via gpspipe.
+	/// Probes GPS availability via GET /api/fix, then streams live fix data
+	/// via GET /api/stream/fixes (SSE) until <paramref name="ct"/> is cancelled.
+	/// Each parsed fix is published via <paramref name="reportStep"/> for live dashboard display.
 	/// </summary>
 	public async Task<DiagnosticEnvelope> ProbeAsync(
 		RunMode mode,
@@ -43,38 +49,29 @@ public sealed class GpsAdapter : IHardwareAdapter
 	{
 		var messages = new List<string>();
 
-		// Resolve gps-svc endpoint from configuration (FR-001, FR-013)
+		// Resolve gps-svc endpoint from configuration (FR-001)
 		var host = _config["Peripherals:Gps:Host"] ?? "localhost";
-		var port = int.TryParse(_config["Peripherals:Gps:Port"], out var p) ? p : 2947;
 		var restPort = int.TryParse(_config["Peripherals:Gps:RestPort"], out var rp) ? rp : 5200;
 		var timeoutMs = int.TryParse(_config["Peripherals:Gps:TimeoutMs"], out var t) ? t : 5_000;
 
-		// Step 1: Check gps-svc availability via REST status endpoint (FR-002)
+		// Step 1: Check gps-svc availability via GET /api/fix (FR-001, FR-002)
 		var reachable = false;
 		try
 		{
 			var client = _httpClientFactory.CreateClient("GpsSvc");
 			client.BaseAddress = new Uri($"http://{host}:{restPort}");
 			client.Timeout = TimeSpan.FromMilliseconds(timeoutMs);
-			using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-			statusCts.CancelAfter(timeoutMs);
-			using var statusResponse = await client.GetAsync("/api/status", statusCts.Token);
-			reachable = statusResponse.IsSuccessStatusCode;
+			using var fixCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+			fixCts.CancelAfter(timeoutMs);
+			using var fixResponse = await client.GetAsync("/api/fix", fixCts.Token);
+			reachable = fixResponse.IsSuccessStatusCode;
 			if (reportStep is not null)
-				await reportStep($"GET http://{host}:{restPort}/api/status", reachable ? "ok" : $"HTTP {(int)statusResponse.StatusCode}", !reachable);
+				await reportStep($"GET http://{host}:{restPort}/api/fix", reachable ? "ok" : $"HTTP {(int)fixResponse.StatusCode}", !reachable);
 		}
 		catch (Exception ex) when (ex is not OperationCanceledException)
 		{
 			if (reportStep is not null)
-				await reportStep($"GET http://{host}:{restPort}/api/status", $"unreachable: {ex.GetType().Name}", true);
-		}
-
-		if (!reachable)
-		{
-			// Fallback: try TCP connectivity to gpsd port (T024)
-			reachable = await TcpHealthCheck.CheckAsync(host, port, timeoutMs, ct);
-			if (reportStep is not null)
-				await reportStep($"TCP connect {host}:{port}", reachable ? "connected" : "unreachable", !reachable);
+				await reportStep($"GET http://{host}:{restPort}/api/fix", $"unreachable: {ex.GetType().Name}", true);
 		}
 
 		if (!reachable)
@@ -83,44 +80,61 @@ public sealed class GpsAdapter : IHardwareAdapter
 			return DiagnosticEnvelope.Unavailable(PeripheralId, $"gps-svc not reachable on {host}:{restPort}");
 		}
 
-		messages.Add($"gps-svc reachable on {host}:{restPort}; starting live GNSS fix stream");
-		_logger.LogInformation("GPS probe: gps-svc reachable on {Host}:{Port}; starting gpspipe -w stream", host, restPort);
+		messages.Add($"gps-svc reachable on {host}:{restPort}; starting live fix stream");
+		_logger.LogInformation("GPS probe: gps-svc reachable on {Host}:{Port}; starting SSE fix stream", host, restPort);
 
-		// Step 2: Stream gpspipe -w JSON output until ct is cancelled (FR-003)
-		// Connect gpspipe to gps-svc host explicitly
+		// Step 2: Stream live fixes via GET /api/stream/fixes SSE (FR-003)
 		var accumulator = new GpsFixAccumulator();
-		string? streamStderr = null;
-		var gpspipeArgs = host == "localhost" ? "-w" : $"-w -l {host}";
 
 		try
 		{
-			streamStderr = await ProcessHelper.StreamLinesAsync(
-				"gpspipe", gpspipeArgs,
-				async (line, lineCt) =>
+			var streamClient = _httpClientFactory.CreateClient("GpsSvc");
+			streamClient.BaseAddress = new Uri($"http://{host}:{restPort}");
+			streamClient.Timeout = Timeout.InfiniteTimeSpan; // SSE is long-lived
+
+			using var stream = await streamClient.GetStreamAsync("/api/stream/fixes", ct);
+			using var reader = new StreamReader(stream);
+
+			while (!ct.IsCancellationRequested)
+			{
+				var line = await reader.ReadLineAsync(ct);
+				if (line is null) break; // stream closed
+
+				// SSE format: lines prefixed with "data:"
+				if (!line.StartsWith("data:", StringComparison.Ordinal))
+					continue;
+
+				var json = line["data:".Length..].Trim();
+				if (string.IsNullOrEmpty(json))
+					continue;
+
+				GpsFix? fix;
+				try
 				{
-					var fix = GnssJsonParser.Parse(line);
-					if (fix is null) return;
+					fix = JsonSerializer.Deserialize<GpsFix>(json, JsonOptions);
+				}
+				catch (JsonException)
+				{
+					// Malformed JSON line — skip silently (same resilience as old parser)
+					continue;
+				}
 
-					accumulator.Update(fix);
+				if (fix is null)
+					continue;
 
-					if (reportStep is not null)
-					{
-						var summary = FormatFixSummary(fix, accumulator);
-						await reportStep("gpspipe -w", summary, false);
-					}
-				},
-				ct);
+				accumulator.Update(fix);
+
+				if (reportStep is not null)
+				{
+					var summary = FormatFixSummary(fix, accumulator);
+					await reportStep("SSE /api/stream/fixes", summary, false);
+				}
+			}
 		}
 		catch (Exception ex) when (ex is not OperationCanceledException)
 		{
-			_logger.LogWarning(ex, "GPS probe: gpspipe -w stream ended with exception");
+			_logger.LogWarning(ex, "GPS probe: SSE fix stream ended with exception");
 			messages.Add($"Stream ended with error: {ex.GetType().Name}: {ex.Message}");
-		}
-
-		if (!string.IsNullOrWhiteSpace(streamStderr))
-		{
-			messages.Add($"gpspipe stderr: {streamStderr.Trim()}");
-			_logger.LogDebug("GPS probe gpspipe stderr: {Stderr}", streamStderr.Trim());
 		}
 
 		// Step 3: Determine final status based on whether a qualifying fix was captured
@@ -128,14 +142,14 @@ public sealed class GpsAdapter : IHardwareAdapter
 
 		if (accumulator.FixObtained)
 		{
-			messages.Add($"GPS PASS: qualifying fix obtained ({accumulator.TotalFixUpdates} TPV updates received)");
-			_logger.LogInformation("GPS probe: qualifying fix obtained after {Count} TPV updates", accumulator.TotalFixUpdates);
+			messages.Add($"GPS PASS: qualifying fix obtained ({accumulator.TotalFixUpdates} fix updates received)");
+			_logger.LogInformation("GPS probe: qualifying fix obtained after {Count} fix updates", accumulator.TotalFixUpdates);
 		}
 		else
 		{
 			// T015: actionable FAIL message
-			messages.Add($"GPS test stopped: no qualifying fix obtained during session ({accumulator.TotalFixUpdates} TPV updates received)");
-			_logger.LogWarning("GPS probe: no qualifying fix after {Count} TPV updates", accumulator.TotalFixUpdates);
+			messages.Add($"GPS test stopped: no qualifying fix obtained during session ({accumulator.TotalFixUpdates} fix updates received)");
+			_logger.LogWarning("GPS probe: no qualifying fix after {Count} fix updates", accumulator.TotalFixUpdates);
 		}
 
 		// Step 4: Build 14-field HealthSnapshot (T016)
@@ -153,43 +167,51 @@ public sealed class GpsAdapter : IHardwareAdapter
 	}
 
 	/// <summary>
-	/// Returns a single raw NMEA sentence via a separate one-shot gpspipe call.
-	/// Independent of any active streaming session. Used for periodic health polling.
+	/// Returns a summary of the latest GPS fix from gps-svc REST API.
+	/// Used for periodic health polling. Returns null if gps-svc is unreachable.
 	/// </summary>
 	public async Task<string?> ReadRawSampleAsync(CancellationToken ct = default)
 	{
-		var result = await ProcessHelper.RunAsync("gpspipe", "-r -n 1 -w", 5_000, ct);
-		var line = result.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-			.FirstOrDefault(l => l.StartsWith('$'));
-		return line;
+		var host = _config["Peripherals:Gps:Host"] ?? "localhost";
+		var restPort = int.TryParse(_config["Peripherals:Gps:RestPort"], out var rp) ? rp : 5200;
+
+		try
+		{
+			var client = _httpClientFactory.CreateClient("GpsSvc");
+			client.BaseAddress = new Uri($"http://{host}:{restPort}");
+			client.Timeout = TimeSpan.FromSeconds(3);
+			using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+			cts.CancelAfter(3_000);
+			var fix = await client.GetFromJsonAsync<GpsFix>("/api/fix", JsonOptions, cts.Token);
+			if (fix is null) return null;
+			var modeStr = fix.Mode switch { 3 => "3D", 2 => "2D", 1 => "no-fix", _ => "unknown" };
+			var lat = fix.Latitude.HasValue ? $"{fix.Latitude:F6}" : "--";
+			var lon = fix.Longitude.HasValue ? $"{fix.Longitude:F6}" : "--";
+			return $"[{modeStr}] lat:{lat} lon:{lon} sats:{fix.SatellitesUsed}/{fix.SatellitesVisible}";
+		}
+		catch
+		{
+			return null;
+		}
 	}
 
-	// ── Private helpers ───────────────────────────────────────────────────────
+	// ── Private helpers ───────────────────────────────────────────────────────────────────────────────────────
 
-	private static string FormatFixSummary(GnssFixUpdate fix, GpsFixAccumulator acc)
+	private static string FormatFixSummary(GpsFix fix, GpsFixAccumulator acc)
 	{
-		if (fix.Class == "TPV")
+		var modeStr = fix.Mode switch
 		{
-			var modeStr = fix.Mode switch
-			{
-				3 => "3D",
-				2 => "2D",
-				1 => "no-fix",
-				_ => "unknown"
-			};
-			var lat = fix.Latitude.HasValue ? $"{fix.Latitude:F6}°" : "--";
-			var lon = fix.Longitude.HasValue ? $"{fix.Longitude:F6}°" : "--";
-			var alt = fix.AltitudeM.HasValue ? $"{fix.AltitudeM:F1}m" : "--";
-			var time = fix.UtcTime ?? "--";
-			var sky = acc.LastSkyUpdate;
-			var sats = sky is not null ? $"{sky.SatellitesUsed}/{sky.SatellitesVisible} sats" : "sats: --";
-			var snr = sky?.MaxSnrDb.HasValue == true ? $" maxSNR:{sky.MaxSnrDb}dB" : "";
-			return $"[{modeStr}] lat:{lat} lon:{lon} alt:{alt} time:{time} {sats}{snr} (#{acc.TotalFixUpdates})";
-		}
-
-		if (fix.Class == "SKY")
-			return $"[SKY] {fix.SatellitesUsed}/{fix.SatellitesVisible} sats used/visible, maxSNR:{fix.MaxSnrDb?.ToString() ?? "--"}dB";
-
-		return $"[{fix.Class}] (parsed)";
+			3 => "3D",
+			2 => "2D",
+			1 => "no-fix",
+			_ => "unknown"
+		};
+		var lat = fix.Latitude.HasValue ? $"{fix.Latitude:F6}°" : "--";
+		var lon = fix.Longitude.HasValue ? $"{fix.Longitude:F6}°" : "--";
+		var alt = fix.AltitudeM.HasValue ? $"{fix.AltitudeM:F1}m" : "--";
+		var time = fix.UtcTime ?? "--";
+		var sats = $"{fix.SatellitesUsed}/{fix.SatellitesVisible} sats";
+		var snr = fix.MaxSnrDb.HasValue ? $" maxSNR:{fix.MaxSnrDb}dB" : "";
+		return $"[{modeStr}] lat:{lat} lon:{lon} alt:{alt} time:{time} {sats}{snr} (#{acc.TotalFixUpdates})";
 	}
 }

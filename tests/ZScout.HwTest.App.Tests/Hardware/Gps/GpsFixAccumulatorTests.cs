@@ -6,17 +6,17 @@ namespace ZScout.HwTest.App.Tests.Hardware.Gps;
 /// <summary>
 /// Unit tests for <see cref="GpsFixAccumulator"/>.
 /// Verifies fix qualification, session accumulation, and HealthSnapshot construction.
+/// Updated for GpsFix model (gps-svc REST API migration, #35).
 /// </summary>
 public sealed class GpsFixAccumulatorTests
 {
-	// ── IsQualifying ──────────────────────────────────────────────────────────
+	// ── IsQualifying ──────────────────────────────────────────────────────────────────────
 
 	[Fact]
 	public void IsQualifying_Mode3WithFullData_ReturnsTrue()
 	{
-		var fix = new GnssFixUpdate
+		var fix = new GpsFix
 		{
-			Class = "TPV",
 			Mode = 3,
 			Latitude = 37.1,
 			Longitude = -122.1,
@@ -28,11 +28,26 @@ public sealed class GpsFixAccumulatorTests
 	}
 
 	[Fact]
+	public void IsQualifying_HasQualifyingFixTrue_ReturnsTrue()
+	{
+		var fix = new GpsFix
+		{
+			Mode = 3,
+			Latitude = 37.1,
+			Longitude = -122.1,
+			AltitudeM = 10.0,
+			UtcTime = "2026-05-18T00:00:00Z",
+			HasQualifyingFix = true
+		};
+
+		Assert.True(GpsFixAccumulator.IsQualifying(fix));
+	}
+
+	[Fact]
 	public void IsQualifying_Mode1_ReturnsFalse()
 	{
-		var fix = new GnssFixUpdate
+		var fix = new GpsFix
 		{
-			Class = "TPV",
 			Mode = 1,
 			Latitude = 37.1,
 			Longitude = -122.1,
@@ -46,9 +61,8 @@ public sealed class GpsFixAccumulatorTests
 	[Fact]
 	public void IsQualifying_ZeroLatitude_ReturnsFalse()
 	{
-		var fix = new GnssFixUpdate
+		var fix = new GpsFix
 		{
-			Class = "TPV",
 			Mode = 3,
 			Latitude = 0.0,
 			Longitude = -122.1,
@@ -62,9 +76,8 @@ public sealed class GpsFixAccumulatorTests
 	[Fact]
 	public void IsQualifying_NullAltitude_ReturnsFalse()
 	{
-		var fix = new GnssFixUpdate
+		var fix = new GpsFix
 		{
-			Class = "TPV",
 			Mode = 2,
 			Latitude = 37.1,
 			Longitude = -122.1,
@@ -78,9 +91,8 @@ public sealed class GpsFixAccumulatorTests
 	[Fact]
 	public void IsQualifying_NullUtcTime_ReturnsFalse()
 	{
-		var fix = new GnssFixUpdate
+		var fix = new GpsFix
 		{
-			Class = "TPV",
 			Mode = 3,
 			Latitude = 37.1,
 			Longitude = -122.1,
@@ -91,23 +103,15 @@ public sealed class GpsFixAccumulatorTests
 		Assert.False(GpsFixAccumulator.IsQualifying(fix));
 	}
 
-	[Fact]
-	public void IsQualifying_SkyClass_ReturnsFalse()
-	{
-		var fix = new GnssFixUpdate { Class = "SKY" };
-
-		Assert.False(GpsFixAccumulator.IsQualifying(fix));
-	}
-
-	// ── Update / accumulation ─────────────────────────────────────────────────
+	// ── Update / accumulation ───────────────────────────────────────────────────────────
 
 	[Fact]
-	public void Update_MultipleNoFixTpvs_FixObtainedFalse_CountCorrect()
+	public void Update_MultipleNoFixUpdates_FixObtainedFalse_CountCorrect()
 	{
 		var acc = new GpsFixAccumulator();
 		for (var i = 0; i < 5; i++)
 		{
-			acc.Update(new GnssFixUpdate { Class = "TPV", Mode = 1 });
+			acc.Update(new GpsFix { Mode = 1 });
 		}
 
 		Assert.False(acc.FixObtained);
@@ -116,12 +120,11 @@ public sealed class GpsFixAccumulatorTests
 	}
 
 	[Fact]
-	public void Update_QualifyingTpv_FixObtainedTrue_BestFixSet()
+	public void Update_QualifyingFix_FixObtainedTrue_BestFixSet()
 	{
 		var acc = new GpsFixAccumulator();
-		var fix = new GnssFixUpdate
+		var fix = new GpsFix
 		{
-			Class = "TPV",
 			Mode = 3,
 			Latitude = 37.1,
 			Longitude = -122.1,
@@ -137,30 +140,30 @@ public sealed class GpsFixAccumulatorTests
 	}
 
 	[Fact]
-	public void Update_SkyUpdate_LastSkyUpdateSet()
+	public void Update_FixWithSatelliteData_LastFixSet()
 	{
 		var acc = new GpsFixAccumulator();
-		var sky = new GnssFixUpdate
+		var fix = new GpsFix
 		{
-			Class = "SKY",
+			Mode = 1,
 			SatellitesUsed = 8,
 			SatellitesVisible = 12,
 			MaxSnrDb = 42,
 			MinSnrDb = 18
 		};
 
-		acc.Update(sky);
+		acc.Update(fix);
 
-		Assert.Same(sky, acc.LastSkyUpdate);
-		Assert.Equal(0, acc.TotalFixUpdates); // SKY does not increment TPV counter
+		Assert.Same(fix, acc.LastFix);
+		Assert.Equal(1, acc.TotalFixUpdates);
 	}
 
 	[Fact]
-	public void Update_QualifyingTpvThenNewQualifying_BestFixUpdated()
+	public void Update_QualifyingFixThenNewQualifying_BestFixUpdated()
 	{
 		var acc = new GpsFixAccumulator();
-		var first = new GnssFixUpdate { Class = "TPV", Mode = 2, Latitude = 37.0, Longitude = -122.0, AltitudeM = 5.0, UtcTime = "2026-05-18T00:00:00Z" };
-		var second = new GnssFixUpdate { Class = "TPV", Mode = 3, Latitude = 37.1, Longitude = -122.1, AltitudeM = 10.0, UtcTime = "2026-05-18T00:01:00Z" };
+		var first = new GpsFix { Mode = 2, Latitude = 37.0, Longitude = -122.0, AltitudeM = 5.0, UtcTime = "2026-05-18T00:00:00Z" };
+		var second = new GpsFix { Mode = 3, Latitude = 37.1, Longitude = -122.1, AltitudeM = 10.0, UtcTime = "2026-05-18T00:01:00Z" };
 
 		acc.Update(first);
 		acc.Update(second);
@@ -170,33 +173,28 @@ public sealed class GpsFixAccumulatorTests
 		Assert.Same(second, acc.BestFix); // most recent qualifying fix wins
 	}
 
-	// ── BuildSnapshot ─────────────────────────────────────────────────────────
+	// ── BuildSnapshot ─────────────────────────────────────────────────────────────────
 
 	[Fact]
 	public void BuildSnapshot_WithFix_AllKeysPresent_WithValues()
 	{
 		var acc = new GpsFixAccumulator();
-		acc.Update(new GnssFixUpdate
+		acc.Update(new GpsFix
 		{
-			Class = "SKY",
-			SatellitesUsed = 8,
-			SatellitesVisible = 12,
-			MaxSnrDb = 42,
-			MinSnrDb = 18
-		});
-		acc.Update(new GnssFixUpdate
-		{
-			Class = "TPV",
 			Mode = 3,
 			Latitude = 37.123456,
 			Longitude = -122.654321,
 			AltitudeM = 42.5,
 			UtcTime = "2026-05-18T00:45:00Z",
 			SpeedMs = 0.1,
-			Hdop = 1.2
+			Hdop = 1.2,
+			SatellitesUsed = 8,
+			SatellitesVisible = 12,
+			MaxSnrDb = 42,
+			MinSnrDb = 18
 		});
 
-		var snapshot = acc.BuildSnapshot(gpsdRunning: true);
+		var snapshot = acc.BuildSnapshot(serviceReachable: true);
 
 		// All 14 keys must be present
 		Assert.Equal(14, snapshot.Count);
@@ -222,7 +220,7 @@ public sealed class GpsFixAccumulatorTests
 		var acc = new GpsFixAccumulator();
 		// No updates at all
 
-		var snapshot = acc.BuildSnapshot(gpsdRunning: true);
+		var snapshot = acc.BuildSnapshot(serviceReachable: true);
 
 		Assert.Equal(14, snapshot.Count);
 		Assert.Equal(true, snapshot["gpsdRunning"]);
@@ -242,11 +240,11 @@ public sealed class GpsFixAccumulatorTests
 	}
 
 	[Fact]
-	public void BuildSnapshot_GpsdNotRunning_GpsdRunningFalse()
+	public void BuildSnapshot_ServiceNotReachable_GpsdRunningFalse()
 	{
 		var acc = new GpsFixAccumulator();
 
-		var snapshot = acc.BuildSnapshot(gpsdRunning: false);
+		var snapshot = acc.BuildSnapshot(serviceReachable: false);
 
 		Assert.Equal(false, snapshot["gpsdRunning"]);
 		Assert.Equal(false, snapshot["fixObtained"]);
@@ -256,9 +254,8 @@ public sealed class GpsFixAccumulatorTests
 	public void BuildSnapshot_SpeedKnots_ConvertedCorrectly()
 	{
 		var acc = new GpsFixAccumulator();
-		acc.Update(new GnssFixUpdate
+		acc.Update(new GpsFix
 		{
-			Class = "TPV",
 			Mode = 3,
 			Latitude = 37.1,
 			Longitude = -122.1,
@@ -267,7 +264,7 @@ public sealed class GpsFixAccumulatorTests
 			SpeedMs = 1.0 // 1 m/s = 1.94384 knots
 		});
 
-		var snapshot = acc.BuildSnapshot(gpsdRunning: true);
+		var snapshot = acc.BuildSnapshot(serviceReachable: true);
 
 		var knots = Assert.IsType<double>(snapshot["speedKnots"]);
 		Assert.Equal(1.94384, knots, precision: 4);
