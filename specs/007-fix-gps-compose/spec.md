@@ -65,3 +65,19 @@ As a field operator, the GPS service healthcheck must use the correct endpoint s
 - The gps-svc image (ghcr.io/bulzi-org/zscout-gps-svc:latest) exposes the `/cgi-bin/health` endpoint for health checks (confirmed by upstream PR #23 merge).
 - The gps-svc image accepts GPS_BAUD as an environment variable to override the default baud rate (confirmed by upstream PR #22 merge).
 - Only the `deploy/docker-compose.yml` file needs modification; no application code changes are required.
+
+## Clarifications
+
+### Session 2026-05-21
+
+No critical ambiguities detected. The issue provides explicit fix instructions for both problems, and upstream PRs #22 and #23 confirm the correct values. All functional requirements are unambiguous and testable.
+
+Coverage summary:
+- Functional Scope & Behavior: Clear
+- Domain & Data Model: Clear (configuration-only change)
+- Interaction & UX Flow: Clear (no user interaction changes)
+- Non-Functional Quality Attributes: Clear
+- Integration & External Dependencies: Clear (upstream fixes confirmed merged)
+- Edge Cases & Failure Handling: Clear
+- Constraints & Tradeoffs: Clear
+- Terminology & Consistency: Clear
