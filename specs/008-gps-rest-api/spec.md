@@ -99,3 +99,11 @@ The Docker image no longer installs gpsd-clients since the adapter no longer she
 - gps-svc SSE stream uses standard `text/event-stream` format with `data:` prefixed JSON lines.
 - The dashboard's existing reportStep callback mechanism is sufficient for displaying REST-sourced fix data.
 - Network connectivity between hw-test container and gps-svc is available via host networking (docker-compose.yml).
+
+## Clarifications
+
+### Session 2026-05-21
+
+- Q: What is the shape of the GpsFix JSON returned by /api/fix and /api/stream/fixes? → A: GpsFix contains fields equivalent to gpsd TPV: mode (int), latitude (double?), longitude (double?), altitudeM (double?), utcTime (string?), speedMs (double?), track (double?), hdop (double?), satellitesUsed (int), satellitesVisible (int), hasQualifyingFix (bool). The adapter will define a local GpsFix record matching this shape.
+- Q: Should the ReadRawSampleAsync method (NMEA one-shot) be removed or converted? → A: Remove it — gps-svc does not expose raw NMEA via REST, and health polling can use GET /api/fix instead.
+- Q: Should GnssFixUpdate and GnssJsonParser be removed entirely or kept for backward compatibility? → A: Remove both — they are gpsd-specific internal models replaced by the GpsFix REST model. Tests referencing them will be rewritten.
