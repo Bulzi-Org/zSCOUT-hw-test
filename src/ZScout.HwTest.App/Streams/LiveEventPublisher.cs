@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.SignalR;
 using ZScout.HwTest.App.Dashboard.Hubs;
+using ZScout.HwTest.App.Hardware.Gps;
 using ZScout.HwTest.Contracts.Models;
 
 namespace ZScout.HwTest.App.Streams;
@@ -9,6 +10,7 @@ public sealed record PeripheralStatusEventArgs(string RunId, PeripheralId Periph
 public sealed record CommandProgressEventArgs(string RunId, PeripheralId PeripheralId, string Command, string Output, bool IsError, DateTimeOffset TimestampUtc);
 public sealed record NmeaSentenceEventArgs(string Sentence, DateTimeOffset TimestampUtc);
 public sealed record NmeaConnectionStateEventArgs(bool Connected);
+public sealed record GpsFixEventArgs(GpsFix Fix, DateTimeOffset ReceivedAtUtc);
 
 /// <summary>
 /// Publishes live events to all connected SignalR clients AND raises .NET events
@@ -24,6 +26,7 @@ public class LiveEventPublisher
 	public event EventHandler<CommandProgressEventArgs>? CommandProgressReceived;
 	public event EventHandler<NmeaSentenceEventArgs>? NmeaSentenceReceived;
 	public event EventHandler<NmeaConnectionStateEventArgs>? NmeaConnectionStateChanged;
+	public event EventHandler<GpsFixEventArgs>? GpsFixReceived;
 
 	/// <summary>Raises <see cref="CommandProgressReceived"/>; callable from derived classes.</summary>
 	protected void RaiseCommandProgressReceived(CommandProgressEventArgs args)
@@ -84,4 +87,12 @@ public class LiveEventPublisher
 	/// </summary>
 	public virtual void PublishNmeaConnectionState(bool connected)
 		=> NmeaConnectionStateChanged?.Invoke(this, new NmeaConnectionStateEventArgs(connected));
+	/// Publishes a GPS fix received from the gps-svc SSE stream to all connected clients.
+	/// </summary>
+	public virtual async Task PublishGpsFixAsync(GpsFix fix, CancellationToken ct = default)
+	{
+		var args = new GpsFixEventArgs(fix, DateTimeOffset.UtcNow);
+		GpsFixReceived?.Invoke(this, args);
+		await _hub.Clients.All.SendAsync(HubEvents.GpsFixReceived, fix, ct);
+	}
 }
