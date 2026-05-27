@@ -2,7 +2,7 @@ name: Sync Project Board
 
 on:
   issues:
-    types: [assigned]
+    types: [assigned, opened, reopened]
   pull_request:
     types: [opened, ready_for_review, closed]
 
@@ -11,26 +11,53 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
-      PROJECT_ID: PVT_kwDOBuYw984BX6ma
-      FIELD_ID: PVTSSF_lADOBuYw984BX6mazhTEHqU
+      PROJECT_ID: PVT_kwDOBuYw384BX6ma
+      FIELD_ID: PVTSSF_lADOBuYw384BX6mazhTEHqU
       PROJECT_NUM: "1"
       ORG: Bulzi-Org
+      BACKLOG: f75ad846
+      READY: 61e4505c
       IN_PROGRESS: 47fc9ee4
       IN_REVIEW: df73e18b
       DONE: "98236657"
     steps:
-      - name: Move issue to In Progress on assignment
-        if: github.event_name == 'issues' && github.event.action == 'assigned'
+      - name: Ensure issue is on board + set status (opened/reopened/assigned)
+        if: github.event_name == 'issues'
         run: |
-          ITEM_ID=$(gh project item-list "$PROJECT_NUM" --owner "$ORG" --format json --limit 200 | \
-            jq -r --arg repo "${{ github.repository }}" --argjson num ${{ github.event.issue.number }} \
-            '.items[] | select(.content.repository == $repo and .content.number == $num) | .id')
+          REPO="${{ github.repository }}"
+          NUM="${{ github.event.issue.number }}"
+          ACTION="${{ github.event.action }}"
+
+          # Try to find existing item
+          ITEM_ID=$(gh project item-list "$PROJECT_NUM" --owner "$ORG" --format json --limit 200 2>/dev/null | \
+            jq -r --arg r "$REPO" --argjson n "$NUM" \
+            '.items[] | select(.content.repository == $r and .content.number == $n) | .id' | head -1)
+
+          if [ -z "$ITEM_ID" ] || [ "$ITEM_ID" = "null" ]; then
+            # Add the issue to the board
+            ITEM_ID=$(gh project item-add "$PROJECT_NUM" --owner "$ORG" \
+              --url "https://github.com/$REPO/issues/$NUM" --format json 2>/dev/null | \
+              jq -r '.id // empty')
+            echo "✓ $REPO#$NUM added to board"
+          fi
+
           if [ -n "$ITEM_ID" ] && [ "$ITEM_ID" != "null" ]; then
+            if [ "$ACTION" = "assigned" ]; then
+              STATUS="$IN_PROGRESS"
+              LABEL="In progress"
+            elif [ "$ACTION" = "opened" ] || [ "$ACTION" = "reopened" ]; then
+              STATUS="$READY"
+              LABEL="Ready"
+            else
+              STATUS="$READY"
+              LABEL="Ready"
+            fi
+
             gh project item-edit --project-id "$PROJECT_ID" --id "$ITEM_ID" \
-              --field-id "$FIELD_ID" --single-select-option-id "$IN_PROGRESS"
-            echo "✓ ${{ github.repository }}#${{ github.event.issue.number }} → In progress"
+              --field-id "$FIELD_ID" --single-select-option-id "$STATUS" 2>/dev/null || true
+            echo "✓ $REPO#$NUM → $LABEL"
           else
-            echo "⚠ Issue not found on project board"
+            echo "⚠ Could not add or find $REPO#$NUM on board"
           fi
 
       - name: Move linked issues to In Review on PR open
