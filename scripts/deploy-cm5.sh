@@ -56,6 +56,27 @@ fi
 
 info "Pre-flight checks passed"
 
+# ── DNS readiness wait ────────────────────────────────────────────────────────
+# network-online.target (used by the systemd unit) is satisfied when the
+# interface has an IP, but the upstream DNS server may not yet be responding.
+# Poll for up to 120 s before attempting any network downloads (image-CM5#28).
+
+info "Waiting for DNS resolution..."
+DNS_OK=0
+for i in $(seq 1 24); do
+    if getent hosts raw.githubusercontent.com >/dev/null 2>&1; then
+        DNS_OK=1
+        break
+    fi
+    warn "DNS not ready yet ($i/24) — retrying in 5 s..."
+    sleep 5
+done
+if [ "$DNS_OK" -eq 0 ]; then
+    error "DNS did not resolve raw.githubusercontent.com after 120 s — aborting"
+    exit 1
+fi
+ok "DNS ready"
+
 # ── Ensure overlay2 storage driver ────────────────────────────────────────────
 # Docker 29.x with the containerd snapshotter fails to compose overlay layers
 # on the RPi kernel 6.12 shipped with the CM5 base image.  Explicitly setting
