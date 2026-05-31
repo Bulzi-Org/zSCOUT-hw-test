@@ -56,6 +56,31 @@ fi
 
 info "Pre-flight checks passed"
 
+# ── Ensure overlay2 storage driver ────────────────────────────────────────────
+# Docker 29.x with the containerd snapshotter fails to compose overlay layers
+# on the RPi kernel 6.12 shipped with the CM5 base image.  Explicitly setting
+# the storage-driver to overlay2 avoids this issue.
+
+DAEMON_JSON="/etc/docker/daemon.json"
+if [ -f "${DAEMON_JSON}" ] && grep -q '"overlay2"' "${DAEMON_JSON}" 2>/dev/null; then
+    info "overlay2 storage driver already configured — skipping"
+else
+    info "Configuring Docker to use overlay2 storage driver"
+    sudo mkdir -p /etc/docker
+    printf '{"storage-driver": "overlay2"}\n' | sudo tee "${DAEMON_JSON}" >/dev/null
+    ok "Created ${DAEMON_JSON}"
+
+    info "Restarting Docker daemon..."
+    sudo systemctl restart docker
+    sleep 5
+
+    if docker info &>/dev/null 2>&1; then
+        ok "Docker daemon restarted successfully"
+    else
+        warn "Docker daemon may still be starting — continuing anyway"
+    fi
+fi
+
 # ── Create deployment directory ───────────────────────────────────────────────
 
 info "Setting up deployment directory: ${DEPLOY_DIR}"
