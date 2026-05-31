@@ -1,6 +1,6 @@
 namespace ZScout.HwTest.Contracts.Models;
 
-public enum PeripheralId { Gps, Sdr, Halow, Compass }
+public enum PeripheralId { Compass, Gps, Sdr, Halow }
 
 public enum PeripheralTransport { Usb, I2c, Pcie, Net }
 

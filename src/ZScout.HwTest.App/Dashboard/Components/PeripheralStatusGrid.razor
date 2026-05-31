@@ -8,7 +8,7 @@
 }
 else
 {
-    <div class="row g-3">
+    <div class="run-flow-list">
         @foreach (var pid in _peripherals)
         {
             var ev = _evidence.FirstOrDefault(e => e.PeripheralId == pid);
@@ -17,52 +17,50 @@ else
                            ? Enum.TryParse<PeripheralStatus>(sv?.ToString(), out var ps) ? ps : PeripheralStatus.Unknown
                            : PeripheralStatus.Unknown;
             var isProbing = status == PeripheralStatus.Unknown && ev is null && _cmdLog.ContainsKey(pid);
+            var statusStr = status switch
+            {
+                PeripheralStatus.Ready => "Pass",
+                PeripheralStatus.Degraded => "Fail",
+                PeripheralStatus.Unavailable => "Fail",
+                _ => isProbing ? "Running" : "Pending"
+            };
 
-            <div class="col-sm-6 col-lg-3">
-                <div class="card peripheral-card status-@status.ToString().ToLower()">
-                    <div class="card-body py-2 px-3">
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <strong class="small">@pid</strong>
-                            <span class="d-flex align-items-center gap-1">
-                                @if (isProbing)
-                                {
-                                    <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
-                                    <span class="badge bg-info">Probing…</span>
-                                }
-                                <span class="badge badge-@status.ToString().ToLower()">@status</span>
-                            </span>
-                        </div>
-                        @if (ev is not null)
+            <div class="run-flow-item status-@statusStr.ToLower()">
+                <div class="d-flex justify-content-between align-items-center">
+                    <strong class="small">@pid</strong>
+                    <div class="d-flex align-items-center gap-1">
+                        @if (isProbing)
                         {
-                            <div class="text-muted" style="font-size:0.75rem">
-                                <div>Dependency: @(ev.DependencyAvailable ? "✓ available" : "✗ unavailable")</div>
-                                <div>Samples: @ev.SampleCount</div>
-                                @if (ev.DiagnosticMessages.Count > 0)
-                                {
-                                    <div class="mt-1 text-truncate" title="@ev.DiagnosticMessages[^1]">
-                                        @ev.DiagnosticMessages[^1]
-                                    </div>
-                                }
-                            </div>
+                            <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
                         }
-                        else
+                        <span class="badge badge-test-@statusStr.ToLower()">@statusStr</span>
+                    </div>
+                </div>
+                @if (ev is not null)
+                {
+                    <div class="text-muted" style="font-size:0.75rem">
+                        <div>Dependency: @(ev.DependencyAvailable ? "✓ available" : "✗ unavailable")</div>
+                        <div>Samples: @ev.SampleCount</div>
+                        @if (ev.DiagnosticMessages.Count > 0)
                         {
-                            <div class="text-muted" style="font-size:0.75rem">Awaiting probe…</div>
-                        }
-                        @if (_cmdLog.TryGetValue(pid, out var entries) && entries.Count > 0)
-                        {
-                            <div class="cmd-log">
-                                @foreach (var entry in entries)
-                                {
-                                    <div class="cmd-log-entry @(entry.IsError ? "error" : "")">
-                                        <div class="cmd-label">$ @entry.Cmd</div>
-                                        <div class="cmd-output">@entry.Output</div>
-                                    </div>
-                                }
+                            <div class="mt-1 text-truncate" title="@ev.DiagnosticMessages[^1]">
+                                @ev.DiagnosticMessages[^1]
                             </div>
                         }
                     </div>
-                </div>
+                }
+                @if (_cmdLog.TryGetValue(pid, out var entries) && entries.Count > 0)
+                {
+                    <div class="cmd-log">
+                        @foreach (var entry in entries)
+                        {
+                            <div class="cmd-log-entry @(entry.IsError ? "error" : "")">
+                                <div class="cmd-label">$ @entry.Cmd</div>
+                                <div class="cmd-output">@entry.Output</div>
+                            </div>
+                        }
+                    </div>
+                }
             </div>
         }
     </div>
@@ -79,7 +77,6 @@ else
 
     protected override async Task OnParametersSetAsync()
     {
-        // Clear per-run state whenever RunId changes
         _cmdLog.Clear();
         _liveStatus.Clear();
         _evidence = (await RunSvc.GetEvidenceAsync(RunId)).ToList();
@@ -98,7 +95,6 @@ else
         _ = InvokeAsync(async () =>
         {
             _liveStatus[e.PeripheralId] = e.Status;
-            // Refresh evidence once the probe has finished
             _evidence = (await RunSvc.GetEvidenceAsync(RunId)).ToList();
             StateHasChanged();
         });
