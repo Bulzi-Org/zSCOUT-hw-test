@@ -16,34 +16,36 @@
     </div>
 }
 
-<!-- Run lifecycle / start panel -->
+@* ── Screen 1: Run Setup ──────────────────────────────────────────── *@
 @if (_activeRun is null)
 {
     <div class="card mb-4">
         <div class="card-body">
             <h6 class="card-title">Start New Run</h6>
-                <div class="d-flex align-items-center gap-3 flex-wrap">
+            <div class="d-flex align-items-start gap-4 flex-wrap">
                 <div>
                     <label class="form-label mb-1">Mode</label>
                     <select class="form-select form-select-sm" style="width:160px"
                             @bind="_selectedMode">
-                        <option value="@RunMode.Host">Host</option>
                         <option value="@RunMode.Container">Container</option>
+                        <option value="@RunMode.Host">Host</option>
                     </select>
-                    <div class="form-text text-muted mt-1">
-                        @if (_selectedMode == RunMode.Host)
-                        {
-                            <span>Runs tests directly on the host OS. Use when the app runs outside Docker.</span>
-                        }
-                        else
-                        {
-                            <span>Runs tests inside the Docker container. Verifies hardware access through /dev bind-mounts.</span>
-                        }
-                    </div>
+                </div>
+                <div>
+                    <label class="form-label mb-1">Tests</label>
+                    @foreach (var pid in _allPeripherals)
+                    {
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="chk-@pid"
+                                   checked="@_selectedTests.Contains(pid)"
+                                   @onchange="e => ToggleTest(pid, (bool)(e.Value ?? false))" />
+                            <label class="form-check-label" for="chk-@pid">@pid</label>
+                        </div>
+                    }
                 </div>
                 <div class="align-self-end">
                     <button class="btn btn-success btn-sm" @onclick="StartRunAsync"
-                            disabled="@_busy">
+                            disabled="@(_busy || _selectedTests.Count == 0)">
                         @if (_busy) { <span class="spinner-border spinner-border-sm me-1"></span> }
                         Start Run
                     </button>
@@ -54,28 +56,117 @@
 }
 else
 {
-    <div class="card mb-4">
-        <div class="card-body">
-            <div class="d-flex justify-content-between align-items-start mb-2">
-                <div>
-                    <h6 class="card-title mb-0">Active Run</h6>
-                    <small class="text-muted font-monospace">@_activeRun.RunId</small>
+    @* ── Screen 2: Run Flow ──────────────────────────────────────── *@
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <small class="text-muted font-monospace">Run @_activeRun.RunId[..8]… · @_activeRun.Mode mode</small>
+        </div>
+        @if (_activeRun.Status is RunStatus.Queued or RunStatus.Running)
+        {
+            <button class="btn btn-outline-danger btn-sm" @onclick="StopRunAsync" disabled="@_busy">Stop All</button>
+        }
+    </div>
+
+    @* ── Test list (vertical run flow) ──────────────────────────── *@
+    <div class="run-flow-list mb-4">
+        @foreach (var pid in _allPeripherals)
+        {
+            var testStatus = _testStatuses.TryGetValue(pid, out var ts) ? ts : "Pending";
+            var errorReason = _testErrors.TryGetValue(pid, out var err) ? err : null;
+            var isActive = pid == _currentTest;
+
+            <div class="run-flow-item @(isActive ? "active" : "") status-@testStatus.ToLower()">
+                <div class="d-flex justify-content-between align-items-center">
+                    <strong>@pid</strong>
+                    <div class="d-flex align-items-center gap-2">
+                        @if (testStatus == "Running")
+                        {
+                            <span class="spinner-border spinner-border-sm text-primary"></span>
+                        }
+                        <span class="badge badge-test-@testStatus.ToLower()">@testStatus</span>
+                        @if (testStatus == "Pending" && _activeRun.Status is RunStatus.Running)
+                        {
+                            <button class="btn btn-outline-primary btn-sm py-0 px-2"
+                                    @onclick="() => ManualRunTestAsync(pid)" disabled="@_busy">RUN</button>
+                        }
+                    </div>
                 </div>
-                @if (_activeRun.Status is RunStatus.Queued or RunStatus.Running)
+                @if (errorReason is not null)
                 {
-                    <button class="btn btn-danger btn-sm" @onclick="StopRunAsync"
-                            disabled="@_busy">Stop</button>
+                    <div class="small text-danger mt-1">@errorReason</div>
+                }
+            </div>
+        }
+    </div>
+
+    @* ── Screen 3: Full-screen test output ──────────────────────── *@
+    @if (_currentTest is not null)
+    {
+        <div class="test-output-panel">
+            @* Header bar *@
+            <div class="test-output-header">
+                <strong>@_currentTest</strong>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-danger btn-sm" @onclick="() => StopTestFailed()">STOP — FAILED</button>
+                    <button class="btn btn-success btn-sm" @onclick="() => StopTestSuccess()">STOP — SUCCESS</button>
+                </div>
+            </div>
+
+            @* Static summary panel *@
+            <div class="test-summary-panel">
+                @if (_currentTest == PeripheralId.Gps)
+                {
+                    <div class="summary-grid">
+                        <span class="summary-label">Health</span><span>@GetSummaryValue("gps_health")</span>
+                        <span class="summary-label">Data Stream</span><span>@GetSummaryValue("gps_data_stream")</span>
+                        <span class="summary-label">Satellites</span><span>@GetSummaryValue("gps_sats")</span>
+                        <span class="summary-label">Latitude</span><span>@GetSummaryValue("gps_lat")</span>
+                        <span class="summary-label">Longitude</span><span>@GetSummaryValue("gps_lon")</span>
+                        <span class="summary-label">Altitude</span><span>@GetSummaryValue("gps_alt")</span>
+                        <span class="summary-label">Time</span><span>@GetSummaryValue("gps_time")</span>
+                        <span class="summary-label">Fix Mode</span><span>@GetSummaryValue("gps_mode")</span>
+                        <span class="summary-label">Max SNR</span><span>@GetSummaryValue("gps_snr")</span>
+                        <span class="summary-label">Fix Count</span><span>@GetSummaryValue("gps_fixes")</span>
+                    </div>
+                }
+                else if (_currentTest == PeripheralId.Compass)
+                {
+                    <div class="summary-grid">
+                        <span class="summary-label">Health</span><span>@GetSummaryValue("compass_health")</span>
+                        <span class="summary-label">Device</span><span>@GetSummaryValue("compass_device")</span>
+                        <span class="summary-label">Heading</span><span>@GetSummaryValue("compass_heading")</span>
+                        <span class="summary-label">X</span><span>@GetSummaryValue("compass_x")</span>
+                        <span class="summary-label">Y</span><span>@GetSummaryValue("compass_y")</span>
+                        <span class="summary-label">Z</span><span>@GetSummaryValue("compass_z")</span>
+                        <span class="summary-label">Temperature</span><span>@GetSummaryValue("compass_temp")</span>
+                        <span class="summary-label">Overflow</span><span>@GetSummaryValue("compass_overflow")</span>
+                        <span class="summary-label">Poll Count</span><span>@GetSummaryValue("compass_polls")</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="summary-grid">
+                        <span class="summary-label">Status</span><span>@GetSummaryValue("generic_status")</span>
+                    </div>
                 }
             </div>
 
-            <RunLifecyclePanel RunId="@_activeRun.RunId" CurrentStatus="_activeRun.Status" />
+            @* Scrolling output log *@
+            <div class="test-scroll-log" id="scrollLog">
+                @foreach (var entry in _logEntries)
+                {
+                    <div class="log-entry @(entry.IsError ? "error" : "")">
+                        <span class="log-ts">[@entry.Timestamp.ToString("HH:mm:ss.fff")]</span>
+                        <span class="log-cmd">@entry.Cmd</span>
+                        <span class="log-sep">→</span>
+                        <span class="log-out">@entry.Output</span>
+                    </div>
+                }
+            </div>
         </div>
-    </div>
+    }
 
-    <!-- Peripheral status grid -->
-    <PeripheralStatusGrid RunId="@_activeRun.RunId" />
-
-    <!-- Auto-verdict results (Completed only) -->
+    @* Results summary (Completed only) *@
     @if (_activeRun.Status == RunStatus.Completed && _completedVerdicts.Count > 0)
     {
         <div class="card mt-4">
@@ -83,11 +174,7 @@ else
                 <h6 class="card-title">Results Summary</h6>
                 <table class="table table-sm mb-0">
                     <thead>
-                        <tr>
-                            <th>Peripheral</th>
-                            <th>Verdict</th>
-                            <th>Details</th>
-                        </tr>
+                        <tr><th>Peripheral</th><th>Verdict</th><th>Details</th></tr>
                     </thead>
                     <tbody>
                         @foreach (var v in _completedVerdicts)
@@ -109,77 +196,60 @@ else
     }
 }
 
-<!-- Recent runs table -->
-@if (_recentRuns.Count > 0)
-{
-    <div class="card mt-4">
-        <div class="card-body">
-            <h6 class="card-title">Recent Runs</h6>
-            <table class="table table-sm table-hover mb-0">
-                <thead>
-                    <tr>
-                        <th>Run ID</th>
-                        <th>Mode</th>
-                        <th>Status</th>
-                        <th>Outcome</th>
-                        <th>Started</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var r in _recentRuns)
-                    {
-                        <tr>
-                            <td class="font-monospace small">@r.RunId[..8]…</td>
-                            <td>@r.Mode</td>
-                            <td><span class="badge bg-secondary">@r.Status</span></td>
-                            <td>
-                                @if (r.OverallOutcome.HasValue)
-                                {
-                                    <span class="badge @(r.OverallOutcome == OverallOutcome.Pass ? "bg-success" : "bg-danger")">
-                                        @r.OverallOutcome
-                                    </span>
-                                }
-                            </td>
-                            <td class="small text-muted">@r.StartedAtUtc?.ToString("yyyy-MM-dd HH:mm")</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    </div>
-}
-
 @code {
+    private static readonly PeripheralId[] _allPeripherals = Enum.GetValues<PeripheralId>();
+
     private TestRun? _activeRun;
-    private List<TestRun> _recentRuns = [];
     private List<PeripheralVerdict> _completedVerdicts = [];
-    private RunMode _selectedMode = RunMode.Host;
+    private RunMode _selectedMode = RunMode.Container;
+    private HashSet<PeripheralId> _selectedTests = new(_allPeripherals);
     private bool _busy;
     private string? _errorMsg;
+
+    // Run flow state
+    private Dictionary<PeripheralId, string> _testStatuses = [];
+    private Dictionary<PeripheralId, string> _testErrors = [];
+    private PeripheralId? _currentTest;
+    private Dictionary<string, string> _summaryValues = [];
+    private List<LogEntry> _logEntries = [];
+
+    private record LogEntry(DateTimeOffset Timestamp, string Cmd, string Output, bool IsError);
 
     protected override async Task OnInitializedAsync()
     {
         LiveEvents.RunStatusChanged += OnRunStatusChanged;
+        LiveEvents.PeripheralStatusChanged += OnPeripheralStatusChanged;
+        LiveEvents.CommandProgressReceived += OnCommandProgress;
         await RefreshAsync();
     }
 
     private async Task RefreshAsync()
     {
         _activeRun = await RunSvc.GetActiveRunAsync();
-        _recentRuns = (await RunSvc.GetRecentRunsAsync(8)).ToList();
         _completedVerdicts = [];
+    }
+
+    private void ToggleTest(PeripheralId pid, bool selected)
+    {
+        if (selected) _selectedTests.Add(pid);
+        else _selectedTests.Remove(pid);
     }
 
     private async Task StartRunAsync()
     {
         _busy = true;
         _errorMsg = null;
+        _testStatuses = _allPeripherals.ToDictionary(p => p, _ => "Pending");
+        _testErrors.Clear();
+        _logEntries.Clear();
+        _summaryValues.Clear();
+        _currentTest = null;
+
         try
         {
             var (run, err) = await RunSvc.StartRunAsync(_selectedMode, "dashboard");
             if (err is not null) _errorMsg = err;
             else _activeRun = run;
-            _recentRuns = (await RunSvc.GetRecentRunsAsync(8)).ToList();
         }
         finally { _busy = false; }
     }
@@ -197,17 +267,43 @@ else
         finally { _busy = false; }
     }
 
+    private async Task ManualRunTestAsync(PeripheralId pid)
+    {
+        // Placeholder — the orchestrator handles test execution via the run lifecycle
+        _testStatuses[pid] = "Running";
+        _currentTest = pid;
+        _logEntries.Clear();
+        _summaryValues.Clear();
+        StateHasChanged();
+    }
+
+    private void StopTestFailed()
+    {
+        if (_activeRun is null || _currentTest is null) return;
+        _testStatuses[_currentTest.Value] = "Fail";
+        var err = _logEntries.LastOrDefault(e => e.IsError)?.Output ?? "Stopped by user";
+        _testErrors[_currentTest.Value] = err;
+        _ = RunSvc.StopRunAsync(_activeRun.RunId);
+    }
+
+    private void StopTestSuccess()
+    {
+        if (_activeRun is null || _currentTest is null) return;
+        _testStatuses[_currentTest.Value] = "Pass";
+        _ = RunSvc.StopRunAsync(_activeRun.RunId);
+    }
+
+    private string GetSummaryValue(string key) => _summaryValues.TryGetValue(key, out var v) ? v : "--";
+
     private void OnRunStatusChanged(object? sender, RunStatusEventArgs e)
     {
         _ = InvokeAsync(async () =>
         {
             if (e.Status == RunStatus.Completed)
             {
-                // GetActiveRunAsync only returns active-state runs; fetch the
-                // completed run by ID so the results summary can be displayed.
                 _activeRun = await RunSvc.GetRunAsync(e.RunId);
                 _completedVerdicts = (await RunSvc.GetVerdictsAsync(e.RunId)).ToList();
-                _recentRuns = (await RunSvc.GetRecentRunsAsync(8)).ToList();
+                _currentTest = null;
             }
             else
             {
@@ -217,5 +313,119 @@ else
         });
     }
 
-    public void Dispose() => LiveEvents.RunStatusChanged -= OnRunStatusChanged;
+    private void OnPeripheralStatusChanged(object? sender, PeripheralStatusEventArgs e)
+    {
+        if (_activeRun is null || e.RunId != _activeRun.RunId) return;
+        _ = InvokeAsync(() =>
+        {
+            var statusStr = e.Status switch
+            {
+                PeripheralStatus.Ready => "Pass",
+                PeripheralStatus.Unknown => "Running",
+                PeripheralStatus.Degraded => "Fail",
+                PeripheralStatus.Unavailable => "Fail",
+                _ => "Pending"
+            };
+
+            // If a new peripheral starts probing, mark it as current
+            if (e.Status == PeripheralStatus.Unknown || !_testStatuses.ContainsKey(e.PeripheralId) || _testStatuses[e.PeripheralId] == "Pending")
+            {
+                _currentTest = e.PeripheralId;
+                _logEntries.Clear();
+                _summaryValues.Clear();
+                _testStatuses[e.PeripheralId] = "Running";
+            }
+
+            if (e.Status is PeripheralStatus.Ready or PeripheralStatus.Degraded or PeripheralStatus.Unavailable)
+            {
+                _testStatuses[e.PeripheralId] = statusStr;
+            }
+
+            StateHasChanged();
+        });
+    }
+
+    private void OnCommandProgress(object? sender, CommandProgressEventArgs e)
+    {
+        if (_activeRun is null || e.RunId != _activeRun.RunId) return;
+        _ = InvokeAsync(() =>
+        {
+            // Update current test if this is the one producing output
+            _currentTest = e.PeripheralId;
+            _testStatuses[e.PeripheralId] = "Running";
+
+            _logEntries.Add(new LogEntry(e.TimestampUtc, e.Command, e.Output, e.IsError));
+            if (_logEntries.Count > 500) _logEntries.RemoveAt(0);
+
+            // Update summary values based on command output
+            UpdateSummaryFromProgress(e);
+            StateHasChanged();
+        });
+    }
+
+    private void UpdateSummaryFromProgress(CommandProgressEventArgs e)
+    {
+        if (e.PeripheralId == PeripheralId.Gps)
+        {
+            _summaryValues["gps_health"] = "Reachable";
+            // Parse SSE fix output for summary values
+            var o = e.Output;
+            if (o.Contains("lat:")) _summaryValues["gps_lat"] = ExtractBetween(o, "lat:", " ");
+            if (o.Contains("lon:")) _summaryValues["gps_lon"] = ExtractBetween(o, "lon:", " ");
+            if (o.Contains("alt:")) _summaryValues["gps_alt"] = ExtractBetween(o, "alt:", " ");
+            if (o.Contains("time:")) _summaryValues["gps_time"] = ExtractBetween(o, "time:", " ");
+            if (o.Contains("sats")) _summaryValues["gps_sats"] = ExtractBetween(o, "] ", " sats").Split(' ').LastOrDefault() ?? "--";
+            if (o.Contains("maxSNR:")) _summaryValues["gps_snr"] = ExtractBetween(o, "maxSNR:", " ");
+            if (o.StartsWith("[")) _summaryValues["gps_mode"] = ExtractBetween(o, "[", "]");
+            if (o.Contains("(#")) _summaryValues["gps_fixes"] = ExtractBetween(o, "(#", ")");
+            if (o.Contains("NMEA rx:"))
+            {
+                var nmeaIdx = o.IndexOf("NMEA rx:"); var nmeaPart = nmeaIdx >= 0 ? o.Substring(nmeaIdx) : "";
+                var nmeaCount = ExtractBetween(nmeaPart, "NMEA rx: ", " ").TrimEnd('—').Trim();
+                _summaryValues["gps_data_stream"] = int.TryParse(nmeaCount, out var n) && n > 0 ? $"Receiving ({n})" : "No Data";
+            }
+        }
+        else if (e.PeripheralId == PeripheralId.Compass)
+        {
+            _summaryValues["compass_health"] = "Reachable";
+            var o = e.Output;
+            if (e.Command == "GET /api/status")
+            {
+                _summaryValues["compass_device"] = o;
+            }
+            else if (e.Command == "GET /api/heading")
+            {
+                if (o.Contains("heading=")) _summaryValues["compass_heading"] = ExtractBetween(o, "heading=", " ");
+                if (o.Contains("x=")) _summaryValues["compass_x"] = ExtractBetween(o, "x=", " ");
+                if (o.Contains("y=")) _summaryValues["compass_y"] = ExtractBetween(o, "y=", " ");
+                if (o.Contains("z=")) _summaryValues["compass_z"] = ExtractBetween(o, "z=", " ");
+                if (o.Contains("temp=")) _summaryValues["compass_temp"] = ExtractBetween(o, "temp=", " ");
+                if (o.Contains("overflow=")) _summaryValues["compass_overflow"] = ExtractBetween(o, "overflow=", "");
+                // Increment poll count
+                var cnt = _summaryValues.TryGetValue("compass_polls", out var pc) && int.TryParse(pc, out var c) ? c + 1 : 1;
+                _summaryValues["compass_polls"] = cnt.ToString();
+            }
+        }
+        else
+        {
+            _summaryValues["generic_status"] = e.Output;
+        }
+    }
+
+    private static string ExtractBetween(string s, string start, string end)
+    {
+        var i = s.IndexOf(start, StringComparison.Ordinal);
+        if (i < 0) return "--";
+        i += start.Length;
+        if (string.IsNullOrEmpty(end)) return s[i..].Trim();
+        var j = s.IndexOf(end, i, StringComparison.Ordinal);
+        return j < 0 ? s[i..].Trim() : s[i..j].Trim();
+    }
+
+    public void Dispose()
+    {
+        LiveEvents.RunStatusChanged -= OnRunStatusChanged;
+        LiveEvents.PeripheralStatusChanged -= OnPeripheralStatusChanged;
+        LiveEvents.CommandProgressReceived -= OnCommandProgress;
+    }
 }

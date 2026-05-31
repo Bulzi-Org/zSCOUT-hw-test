@@ -204,3 +204,36 @@ body {
 .cmd-log-entry .cmd-label { color:#58a6ff; }
 .cmd-log-entry .cmd-output { color:#8b949e; white-space:pre-wrap; word-break:break-all; }
 .cmd-log-entry.error .cmd-output { color:#f85149; }
+
+/* ── Run Flow List (sequential test flow) ──────────── */
+.run-flow-list { display:flex; flex-direction:column; gap:0.5rem; }
+.run-flow-item { background:#fff; border:1px solid #dee2e6; border-radius:6px; padding:0.75rem 1rem; transition:border-color 0.2s,background 0.2s; }
+.run-flow-item.active { border-color:#0d6efd; background:#f0f6ff; }
+.run-flow-item.status-pass { border-left:4px solid var(--status-ready); }
+.run-flow-item.status-fail { border-left:4px solid var(--status-unavailable); }
+.run-flow-item.status-running { border-left:4px solid #0d6efd; }
+.run-flow-item.status-pending { border-left:4px solid var(--status-unknown); }
+
+/* Test status badges */
+.badge-test-pass { background-color:var(--status-ready)!important; }
+.badge-test-fail { background-color:var(--status-unavailable)!important; }
+.badge-test-running { background-color:#0d6efd!important; }
+.badge-test-pending { background-color:var(--status-unknown)!important; }
+
+/* ── Full-screen test output panel ─────────────────── */
+.test-output-panel { background:#fff; border:1px solid #dee2e6; border-radius:6px; overflow:hidden; display:flex; flex-direction:column; }
+.test-output-header { display:flex; justify-content:space-between; align-items:center; padding:0.75rem 1rem; background:#1a1d21; color:#fff; flex-shrink:0; }
+
+/* Static summary panel (non-scrolling) */
+.test-summary-panel { padding:0.75rem 1rem; background:#f8f9fa; border-bottom:1px solid #dee2e6; flex-shrink:0; }
+.summary-grid { display:grid; grid-template-columns:auto 1fr; gap:0.25rem 1rem; font-size:0.82rem; }
+.summary-label { color:#6c757d; font-weight:600; }
+
+/* Scrolling output log */
+.test-scroll-log { flex:1; min-height:300px; max-height:500px; overflow-y:auto; background:#1e2227; padding:0.75rem; font-family:monospace; font-size:0.75rem; }
+.log-entry { margin-bottom:0.15rem; line-height:1.4; white-space:pre-wrap; word-break:break-all; }
+.log-entry .log-ts { color:#8b949e; }
+.log-entry .log-cmd { color:#58a6ff; margin-left:0.25rem; }
+.log-entry .log-sep { color:#484f58; margin:0 0.25rem; }
+.log-entry .log-out { color:#c9d1d9; }
+.log-entry.error .log-out { color:#f85149; }

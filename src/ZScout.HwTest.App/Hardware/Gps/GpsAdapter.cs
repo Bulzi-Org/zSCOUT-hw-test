@@ -7,15 +7,9 @@ namespace ZScout.HwTest.App.Hardware.Gps;
 
 /// <summary>
 /// GPS adapter: probes the MicoAir MG-A01 via gps-svc REST API.
-/// Connects to gps-svc on configurable host:restPort (default localhost:5200).
 /// Step 1 — Availability: GET /api/fix returns the current fix snapshot.
-/// Step 2 — Streaming: GET /api/stream/fixes (SSE) streams live GpsFix JSON
-/// until the CancellationToken is cancelled (operator Stop).
-/// Returns PASS (Ready) if a qualifying fix was obtained,
-/// FAIL (Degraded) if gps-svc ran but no qualifying fix arrived,
-/// or Unavailable if gps-svc is absent.
-/// T016: Streaming probe with fix-based verdict and 14-field HealthSnapshot.
-/// T024: Unavailable returned immediately when gps-svc is not reachable; other adapters not blocked.
+/// Step 2 — Streaming: GET /api/stream/fixes (SSE) + parallel /api/stream/nmea
+/// for NMEA sentence counting to detect data stream health.
 /// </summary>
 public sealed class GpsAdapter : IHardwareAdapter
 {
@@ -39,8 +33,8 @@ public sealed class GpsAdapter : IHardwareAdapter
 
 	/// <summary>
 	/// Probes GPS availability via GET /api/fix, then streams live fix data
-	/// via GET /api/stream/fixes (SSE) until <paramref name="ct"/> is cancelled.
-	/// Each parsed fix is published via <paramref name="reportStep"/> for live dashboard display.
+	/// via GET /api/stream/fixes (SSE) with parallel NMEA sentence counting
+	/// via /api/stream/nmea until cancelled.
 	/// </summary>
 	public async Task<DiagnosticEnvelope> ProbeAsync(
 		RunMode mode,
@@ -49,12 +43,11 @@ public sealed class GpsAdapter : IHardwareAdapter
 	{
 		var messages = new List<string>();
 
-		// Resolve gps-svc endpoint from configuration (FR-001)
 		var host = _config["Peripherals:Gps:Host"] ?? "localhost";
 		var restPort = int.TryParse(_config["Peripherals:Gps:RestPort"], out var rp) ? rp : 5200;
 		var timeoutMs = int.TryParse(_config["Peripherals:Gps:TimeoutMs"], out var t) ? t : 5_000;
 
-		// Step 1: Check gps-svc availability via GET /api/fix (FR-001, FR-002)
+		// Step 1: Check gps-svc availability via GET /api/fix
 		var reachable = false;
 		try
 		{
@@ -81,16 +74,42 @@ public sealed class GpsAdapter : IHardwareAdapter
 		}
 
 		messages.Add($"gps-svc reachable on {host}:{restPort}; starting live fix stream");
-		_logger.LogInformation("GPS probe: gps-svc reachable on {Host}:{Port}; starting SSE fix stream", host, restPort);
+		_logger.LogInformation("GPS probe: gps-svc reachable on {Host}:{Port}; starting SSE fix stream + NMEA monitor", host, restPort);
 
-		// Step 2: Stream live fixes via GET /api/stream/fixes SSE (FR-003)
+		// Step 2: Stream live fixes + parallel NMEA counting
 		var accumulator = new GpsFixAccumulator();
+		var nmeaCount = 0;
+
+		// Start parallel NMEA sentence counter
+		var nmeaTask = Task.Run(async () =>
+		{
+			try
+			{
+				var nmeaClient = _httpClientFactory.CreateClient("GpsSvc");
+				nmeaClient.BaseAddress = new Uri($"http://{host}:{restPort}");
+				nmeaClient.Timeout = Timeout.InfiniteTimeSpan;
+				using var nmeaStream = await nmeaClient.GetStreamAsync("/api/stream/nmea", ct);
+				using var nmeaReader = new StreamReader(nmeaStream);
+				while (!ct.IsCancellationRequested)
+				{
+					var line = await nmeaReader.ReadLineAsync(ct);
+					if (line is null) break;
+					if (line.StartsWith("data:", StringComparison.Ordinal))
+						Interlocked.Increment(ref nmeaCount);
+				}
+			}
+			catch (OperationCanceledException) { }
+			catch (Exception ex)
+			{
+				_logger.LogDebug(ex, "GPS probe: NMEA stream monitor ended");
+			}
+		}, ct);
 
 		try
 		{
 			var streamClient = _httpClientFactory.CreateClient("GpsSvc");
 			streamClient.BaseAddress = new Uri($"http://{host}:{restPort}");
-			streamClient.Timeout = Timeout.InfiniteTimeSpan; // SSE is long-lived
+			streamClient.Timeout = Timeout.InfiniteTimeSpan;
 
 			using var stream = await streamClient.GetStreamAsync("/api/stream/fixes", ct);
 			using var reader = new StreamReader(stream);
@@ -98,9 +117,8 @@ public sealed class GpsAdapter : IHardwareAdapter
 			while (!ct.IsCancellationRequested)
 			{
 				var line = await reader.ReadLineAsync(ct);
-				if (line is null) break; // stream closed
+				if (line is null) break;
 
-				// SSE format: lines prefixed with "data:"
 				if (!line.StartsWith("data:", StringComparison.Ordinal))
 					continue;
 
@@ -115,7 +133,6 @@ public sealed class GpsAdapter : IHardwareAdapter
 				}
 				catch (JsonException)
 				{
-					// Malformed JSON line — skip silently (same resilience as old parser)
 					continue;
 				}
 
@@ -126,7 +143,8 @@ public sealed class GpsAdapter : IHardwareAdapter
 
 				if (reportStep is not null)
 				{
-					var summary = FormatFixSummary(fix, accumulator);
+					var currentNmea = Interlocked.CompareExchange(ref nmeaCount, 0, 0);
+					var summary = FormatFixSummary(fix, accumulator, currentNmea);
 					await reportStep("SSE /api/stream/fixes", summary, false);
 				}
 			}
@@ -137,23 +155,29 @@ public sealed class GpsAdapter : IHardwareAdapter
 			messages.Add($"Stream ended with error: {ex.GetType().Name}: {ex.Message}");
 		}
 
-		// Step 3: Determine final status based on whether a qualifying fix was captured
+		// Wait briefly for NMEA task to wind down
+		try { await nmeaTask.WaitAsync(TimeSpan.FromSeconds(2)); }
+		catch { /* timeout or cancellation — fine */ }
+
+		var finalNmeaCount = Interlocked.CompareExchange(ref nmeaCount, 0, 0);
+
+		// Step 3: Determine final status
 		var status = accumulator.FixObtained ? PeripheralStatus.Ready : PeripheralStatus.Degraded;
 
 		if (accumulator.FixObtained)
 		{
-			messages.Add($"GPS PASS: qualifying fix obtained ({accumulator.TotalFixUpdates} fix updates received)");
-			_logger.LogInformation("GPS probe: qualifying fix obtained after {Count} fix updates", accumulator.TotalFixUpdates);
+			messages.Add($"GPS PASS: qualifying fix obtained ({accumulator.TotalFixUpdates} fix updates, {finalNmeaCount} NMEA sentences)");
 		}
 		else
 		{
-			// T015: actionable FAIL message
-			messages.Add($"GPS test stopped: no qualifying fix obtained during session ({accumulator.TotalFixUpdates} fix updates received)");
-			_logger.LogWarning("GPS probe: no qualifying fix after {Count} fix updates", accumulator.TotalFixUpdates);
+			messages.Add(finalNmeaCount == 0
+				? $"GPS test stopped: no NMEA data received — check baud rate / wiring ({accumulator.TotalFixUpdates} fix updates)"
+				: $"GPS test stopped: no qualifying fix obtained ({accumulator.TotalFixUpdates} fix updates, {finalNmeaCount} NMEA sentences)");
 		}
 
-		// Step 4: Build 14-field HealthSnapshot (T016)
+		// Step 4: Build HealthSnapshot
 		var snapshotValues = accumulator.BuildSnapshot(reachable);
+		snapshotValues["nmea_sentence_count"] = finalNmeaCount;
 
 		return new DiagnosticEnvelope
 		{
@@ -168,7 +192,6 @@ public sealed class GpsAdapter : IHardwareAdapter
 
 	/// <summary>
 	/// Returns a summary of the latest GPS fix from gps-svc REST API.
-	/// Used for periodic health polling. Returns null if gps-svc is unreachable.
 	/// </summary>
 	public async Task<string?> ReadRawSampleAsync(CancellationToken ct = default)
 	{
@@ -195,9 +218,7 @@ public sealed class GpsAdapter : IHardwareAdapter
 		}
 	}
 
-	// ── Private helpers ───────────────────────────────────────────────────────────────────────────────────────
-
-	private static string FormatFixSummary(GpsFix fix, GpsFixAccumulator acc)
+	private static string FormatFixSummary(GpsFix fix, GpsFixAccumulator acc, int nmeaRxCount)
 	{
 		var modeStr = fix.Mode switch
 		{
@@ -212,6 +233,7 @@ public sealed class GpsAdapter : IHardwareAdapter
 		var time = fix.UtcTime ?? "--";
 		var sats = $"{fix.SatellitesUsed}/{fix.SatellitesVisible} sats";
 		var snr = fix.MaxSnrDb.HasValue ? $" maxSNR:{fix.MaxSnrDb}dB" : "";
-		return $"[{modeStr}] lat:{lat} lon:{lon} alt:{alt} time:{time} {sats}{snr} (#{acc.TotalFixUpdates})";
+		var nmeaInfo = nmeaRxCount > 0 ? $" | NMEA rx: {nmeaRxCount}" : " | NMEA rx: 0 — no raw GPS data received (check baud rate / wiring)";
+		return $"[{modeStr}] lat:{lat} lon:{lon} alt:{alt} time:{time} {sats}{snr} (#{acc.TotalFixUpdates}){nmeaInfo}";
 	}
 }

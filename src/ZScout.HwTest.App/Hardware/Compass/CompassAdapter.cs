@@ -6,10 +6,8 @@ namespace ZScout.HwTest.App.Hardware.Compass;
 
 /// <summary>
 /// Compass adapter: probes the QMC5883L magnetometer via compass-svc REST API (FR-004).
-/// Connects to compass-svc on configurable host:port (default localhost:5100) instead
-/// of directly accessing the I2C bus. Eliminates the need for /dev/i2c-* device
-/// pass-through and --privileged mode.
-/// T017: Heading, XYZ, temperature, overflow data via HTTP REST.
+/// Continuously polls GET /api/heading (~1s interval) until cancellation, reporting
+/// each reading via the reportStep callback for live dashboard display.
 /// </summary>
 public sealed class CompassAdapter : IHardwareAdapter
 {
@@ -27,14 +25,14 @@ public sealed class CompassAdapter : IHardwareAdapter
 	}
 
 	/// <summary>
-	/// Probes the compass via compass-svc REST API (FR-004, FR-005).
-	/// Returns Ready with heading data on success, Unavailable if service is not reachable.
+	/// Probes the compass via compass-svc REST API with continuous polling.
+	/// Checks device status first, then polls GET /api/heading in a loop until
+	/// the cancellation token fires (user stops the test).
 	/// </summary>
 	public async Task<DiagnosticEnvelope> ProbeAsync(RunMode mode, Func<string, string, bool, Task>? reportStep = null, CancellationToken ct = default)
 	{
 		var messages = new List<string>();
 
-		// Resolve compass-svc endpoint from configuration (FR-004, FR-013)
 		var host = _config["Peripherals:Compass:Host"] ?? "localhost";
 		var port = int.TryParse(_config["Peripherals:Compass:Port"], out var p) ? p : 5100;
 		var timeoutMs = int.TryParse(_config["Peripherals:Compass:TimeoutMs"], out var t) ? t : 5_000;
@@ -46,7 +44,7 @@ public sealed class CompassAdapter : IHardwareAdapter
 
 		try
 		{
-			// 1. Check device status via REST (FR-018)
+			// 1. Check device status via REST
 			using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 			statusCts.CancelAfter(timeoutMs);
 			using var statusResponse = await client.GetAsync("/api/status", statusCts.Token);
@@ -89,29 +87,54 @@ public sealed class CompassAdapter : IHardwareAdapter
 
 			messages.Add($"Device available at {deviceAddress} on bus {bus}");
 
-			// 2. Get heading data via REST (FR-005)
-			using var headingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-			headingCts.CancelAfter(timeoutMs);
-			using var headingResponse = await client.GetAsync("/api/heading", headingCts.Token);
-			headingResponse.EnsureSuccessStatusCode();
-			using var headingDoc = await JsonDocument.ParseAsync(await headingResponse.Content.ReadAsStreamAsync(headingCts.Token), cancellationToken: headingCts.Token);
-			var headingRoot = headingDoc.RootElement;
+			// 2. Continuous polling loop — poll GET /api/heading until cancelled
+			var pollCount = 0;
+			double lastHeading = 0, lastX = 0, lastY = 0, lastZ = 0, lastTemp = 0;
+			bool lastOverflow = false;
+			bool hasNonZeroData = false;
 
-			var headingDegrees = headingRoot.TryGetProperty("headingDegrees", out var hdEl) ? hdEl.GetDouble() : 0.0;
-			var x = headingRoot.TryGetProperty("x", out var xEl) ? xEl.GetDouble() : 0.0;
-			var y = headingRoot.TryGetProperty("y", out var yEl) ? yEl.GetDouble() : 0.0;
-			var z = headingRoot.TryGetProperty("z", out var zEl) ? zEl.GetDouble() : 0.0;
-			var temperatureC = headingRoot.TryGetProperty("temperature", out var tempEl) ? tempEl.GetDouble() : 0.0;
-			var overflow = headingRoot.TryGetProperty("overflow", out var ovEl) && ovEl.GetBoolean();
+			while (!ct.IsCancellationRequested)
+			{
+				try
+				{
+					using var headingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+					headingCts.CancelAfter(timeoutMs);
+					using var headingResponse = await client.GetAsync("/api/heading", headingCts.Token);
+					headingResponse.EnsureSuccessStatusCode();
+					using var headingDoc = await JsonDocument.ParseAsync(await headingResponse.Content.ReadAsStreamAsync(headingCts.Token), cancellationToken: headingCts.Token);
+					var headingRoot = headingDoc.RootElement;
 
-			if (reportStep is not null)
-				await reportStep("GET /api/heading", $"heading={headingDegrees:F1}° x={x:F2} y={y:F2} z={z:F2}", false);
+					lastHeading = headingRoot.TryGetProperty("headingDegrees", out var hdEl) ? hdEl.GetDouble() : 0.0;
+					lastX = headingRoot.TryGetProperty("x", out var xEl) ? xEl.GetDouble() : 0.0;
+					lastY = headingRoot.TryGetProperty("y", out var yEl) ? yEl.GetDouble() : 0.0;
+					lastZ = headingRoot.TryGetProperty("z", out var zEl) ? zEl.GetDouble() : 0.0;
+					lastTemp = headingRoot.TryGetProperty("temperature", out var tempEl) ? tempEl.GetDouble() : 0.0;
+					lastOverflow = headingRoot.TryGetProperty("overflow", out var ovEl) && ovEl.GetBoolean();
 
-			var hasNonZeroData = x != 0 || y != 0 || z != 0;
+					pollCount++;
+					if (lastX != 0 || lastY != 0 || lastZ != 0)
+						hasNonZeroData = true;
+
+					if (reportStep is not null)
+						await reportStep("GET /api/heading",
+							$"heading={lastHeading:F1}° x={lastX:F2} y={lastY:F2} z={lastZ:F2} temp={lastTemp:F1}°C overflow={lastOverflow}",
+							false);
+				}
+				catch (OperationCanceledException) { break; }
+				catch (Exception ex)
+				{
+					if (reportStep is not null)
+						await reportStep("GET /api/heading", $"error: {ex.Message}", true);
+				}
+
+				try { await Task.Delay(1000, ct); }
+				catch (OperationCanceledException) { break; }
+			}
+
 			var finalStatus = hasNonZeroData ? PeripheralStatus.Ready : PeripheralStatus.Degraded;
 
 			messages.Add(hasNonZeroData
-				? $"Compass PASS: heading={headingDegrees:F1}° XYZ=({x:F2},{y:F2},{z:F2}) temp={temperatureC:F1}°C"
+				? $"Compass PASS: {pollCount} readings, last heading={lastHeading:F1}° XYZ=({lastX:F2},{lastY:F2},{lastZ:F2}) temp={lastTemp:F1}°C"
 				: "Compass FAIL: all magnetometer axes report zero — sensor may be malfunctioning");
 
 			return new DiagnosticEnvelope
@@ -128,12 +151,13 @@ public sealed class CompassAdapter : IHardwareAdapter
 						["device_available"] = true,
 						["device_address"] = deviceAddress,
 						["bus"] = bus,
-						["heading_degrees"] = headingDegrees,
-						["x"] = x,
-						["y"] = y,
-						["z"] = z,
-						["temperature_c"] = temperatureC,
-						["overflow"] = overflow
+						["heading_degrees"] = lastHeading,
+						["x"] = lastX,
+						["y"] = lastY,
+						["z"] = lastZ,
+						["temperature_c"] = lastTemp,
+						["overflow"] = lastOverflow,
+						["poll_count"] = pollCount
 					}
 				},
 				CapturedAtUtc = DateTimeOffset.UtcNow
