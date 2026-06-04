@@ -13,5 +13,11 @@
     <Routes @rendermode="InteractiveServer" />
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" crossorigin="anonymous"></script>
     <script src="_framework/blazor.server.js"></script>
+    <script>
+        function scrollToBottom(elementId) {
+            var el = document.getElementById(elementId);
+            if (el) el.scrollTop = el.scrollHeight;
+        }
+    </script>
 </body>
 </html>

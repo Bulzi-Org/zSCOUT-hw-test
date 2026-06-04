@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @inject RunCommandService RunSvc
 @inject LiveEventPublisher LiveEvents
+@inject IJSRuntime JS
 @implements IDisposable
 
 <PageTitle>Control – zSCOUT</PageTitle>
@@ -61,7 +62,7 @@ else
         <div>
             <small class="text-muted font-monospace">Run @_activeRun.RunId[..8]… · @_activeRun.Mode mode</small>
         </div>
-        @if (_activeRun.Status is RunStatus.Queued or RunStatus.Running)
+    @if (_activeRun.Status is RunStatus.Queued or RunStatus.Running or RunStatus.AwaitingVerdict)
         {
             <button class="btn btn-outline-danger btn-sm" @onclick="StopRunAsync" disabled="@_busy">Stop All</button>
         }
@@ -73,6 +74,7 @@ else
         {
             var testStatus = _testStatuses.TryGetValue(pid, out var ts) ? ts : "Pending";
             var errorReason = _testErrors.TryGetValue(pid, out var err) ? err : null;
+            var verdictDetail = _verdictDetails.TryGetValue(pid, out var vd) ? vd : null;
             var isActive = pid == _currentTest;
 
             <div class="run-flow-item @(isActive ? "active" : "") status-@testStatus.ToLower()">
@@ -84,14 +86,13 @@ else
                             <span class="spinner-border spinner-border-sm text-primary"></span>
                         }
                         <span class="badge badge-test-@testStatus.ToLower()">@testStatus</span>
-                        @if (testStatus == "Pending" && _activeRun.Status is RunStatus.Running)
-                        {
-                            <button class="btn btn-outline-primary btn-sm py-0 px-2"
-                                    @onclick="() => ManualRunTestAsync(pid)" disabled="@_busy">RUN</button>
-                        }
                     </div>
                 </div>
-                @if (errorReason is not null)
+                @if (verdictDetail is not null)
+                {
+                    <div class="small mt-1 @(testStatus == "Fail" ? "text-danger" : "text-success")">@verdictDetail</div>
+                }
+                @if (errorReason is not null && verdictDetail is null)
                 {
                     <div class="small text-danger mt-1">@errorReason</div>
                 }
@@ -166,41 +167,12 @@ else
         </div>
     }
 
-    @* Results summary (Completed only) *@
-    @if (_activeRun.Status == RunStatus.Completed && _completedVerdicts.Count > 0)
-    {
-        <div class="card mt-4">
-            <div class="card-body">
-                <h6 class="card-title">Results Summary</h6>
-                <table class="table table-sm mb-0">
-                    <thead>
-                        <tr><th>Peripheral</th><th>Verdict</th><th>Details</th></tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var v in _completedVerdicts)
-                        {
-                            <tr>
-                                <td><strong>@v.PeripheralId</strong></td>
-                                <td>
-                                    <span class="badge @(v.Outcome == VerdictOutcome.Pass ? "bg-success" : "bg-danger")">
-                                        @v.Outcome
-                                    </span>
-                                </td>
-                                <td class="small text-muted">@(v.FailureReason ?? "—")</td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    }
 }
 
 @code {
     private static readonly PeripheralId[] _allPeripherals = Enum.GetValues<PeripheralId>();
 
     private TestRun? _activeRun;
-    private List<PeripheralVerdict> _completedVerdicts = [];
     private RunMode _selectedMode = RunMode.Container;
     private HashSet<PeripheralId> _selectedTests = new(_allPeripherals);
     private bool _busy;
@@ -209,6 +181,7 @@ else
     // Run flow state
     private Dictionary<PeripheralId, string> _testStatuses = [];
     private Dictionary<PeripheralId, string> _testErrors = [];
+    private Dictionary<PeripheralId, string> _verdictDetails = [];
     private PeripheralId? _currentTest;
     private Dictionary<string, string> _summaryValues = [];
     private List<LogEntry> _logEntries = [];
@@ -226,7 +199,6 @@ else
     private async Task RefreshAsync()
     {
         _activeRun = await RunSvc.GetActiveRunAsync();
-        _completedVerdicts = [];
     }
 
     private void ToggleTest(PeripheralId pid, bool selected)
@@ -241,6 +213,7 @@ else
         _errorMsg = null;
         _testStatuses = _allPeripherals.ToDictionary(p => p, _ => "Pending");
         _testErrors.Clear();
+        _verdictDetails.Clear();
         _logEntries.Clear();
         _summaryValues.Clear();
         _currentTest = null;
@@ -267,30 +240,48 @@ else
         finally { _busy = false; }
     }
 
-    private async Task ManualRunTestAsync(PeripheralId pid)
-    {
-        // Placeholder — the orchestrator handles test execution via the run lifecycle
-        _testStatuses[pid] = "Running";
-        _currentTest = pid;
-        _logEntries.Clear();
-        _summaryValues.Clear();
-        StateHasChanged();
-    }
-
-    private void StopTestFailed()
+    private async Task StopTestFailed()
     {
         if (_activeRun is null || _currentTest is null) return;
-        _testStatuses[_currentTest.Value] = "Fail";
+        _busy = true;
+        var pid = _currentTest.Value;
         var err = _logEntries.LastOrDefault(e => e.IsError)?.Output ?? "Stopped by user";
-        _testErrors[_currentTest.Value] = err;
-        _ = RunSvc.StopRunAsync(_activeRun.RunId);
+
+        try
+        {
+            var (ok, error) = await RunSvc.StopTestWithVerdictAsync(
+                _activeRun.RunId, pid, VerdictOutcome.Fail, err, "dashboard");
+            if (!ok) _errorMsg = error;
+            else
+            {
+                _testStatuses[pid] = "Fail";
+                _testErrors[pid] = err;
+                _verdictDetails[pid] = err;
+                _currentTest = null;
+            }
+        }
+        finally { _busy = false; }
     }
 
-    private void StopTestSuccess()
+    private async Task StopTestSuccess()
     {
         if (_activeRun is null || _currentTest is null) return;
-        _testStatuses[_currentTest.Value] = "Pass";
-        _ = RunSvc.StopRunAsync(_activeRun.RunId);
+        _busy = true;
+        var pid = _currentTest.Value;
+
+        try
+        {
+            var (ok, error) = await RunSvc.StopTestWithVerdictAsync(
+                _activeRun.RunId, pid, VerdictOutcome.Pass, null, "dashboard");
+            if (!ok) _errorMsg = error;
+            else
+            {
+                _testStatuses[pid] = "Pass";
+                _verdictDetails[pid] = "\u2014";
+                _currentTest = null;
+            }
+        }
+        finally { _busy = false; }
     }
 
     private string GetSummaryValue(string key) => _summaryValues.TryGetValue(key, out var v) ? v : "--";
@@ -299,11 +290,18 @@ else
     {
         _ = InvokeAsync(async () =>
         {
-            if (e.Status == RunStatus.Completed)
+            if (e.Status == RunStatus.Completed || e.Status == RunStatus.Stopped)
             {
                 _activeRun = await RunSvc.GetRunAsync(e.RunId);
-                _completedVerdicts = (await RunSvc.GetVerdictsAsync(e.RunId)).ToList();
                 _currentTest = null;
+
+                // Populate inline verdict details for all peripherals that have verdicts
+                var verdicts = await RunSvc.GetVerdictsAsync(e.RunId);
+                foreach (var v in verdicts)
+                {
+                    _testStatuses[v.PeripheralId] = v.Outcome == VerdictOutcome.Pass ? "Pass" : "Fail";
+                    _verdictDetails[v.PeripheralId] = v.FailureReason ?? "\u2014";
+                }
             }
             else
             {
@@ -348,7 +346,7 @@ else
     private void OnCommandProgress(object? sender, CommandProgressEventArgs e)
     {
         if (_activeRun is null || e.RunId != _activeRun.RunId) return;
-        _ = InvokeAsync(() =>
+        _ = InvokeAsync(async () =>
         {
             // Update current test if this is the one producing output
             _currentTest = e.PeripheralId;
@@ -360,6 +358,10 @@ else
             // Update summary values based on command output
             UpdateSummaryFromProgress(e);
             StateHasChanged();
+
+            // Auto-scroll the output log to the bottom
+            await Task.Yield();
+            await JS.InvokeVoidAsync("scrollToBottom", "scrollLog");
         });
     }
 

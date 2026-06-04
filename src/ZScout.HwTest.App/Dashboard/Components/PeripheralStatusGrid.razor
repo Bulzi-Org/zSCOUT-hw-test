@@ -1,5 +1,6 @@
 @inject RunCommandService RunSvc
 @inject LiveEventPublisher LiveEvents
+@inject IJSRuntime JS
 @implements IDisposable
 
 @if (_evidence.Count == 0 && !_loaded)
@@ -36,6 +37,12 @@ else
                         <span class="badge badge-test-@statusStr.ToLower()">@statusStr</span>
                     </div>
                 </div>
+                @if (_verdictDetails.TryGetValue(pid, out var verdictDetail))
+                {
+                    <div class="small mt-1 @(statusStr == "Fail" ? "text-danger" : "text-success")">
+                        @verdictDetail
+                    </div>
+                }
                 @if (ev is not null)
                 {
                     <div class="text-muted" style="font-size:0.75rem">
@@ -51,7 +58,7 @@ else
                 }
                 @if (_cmdLog.TryGetValue(pid, out var entries) && entries.Count > 0)
                 {
-                    <div class="cmd-log">
+                    <div class="cmd-log" id="cmdlog-@pid">
                         @foreach (var entry in entries)
                         {
                             <div class="cmd-log-entry @(entry.IsError ? "error" : "")">
@@ -73,6 +80,7 @@ else
     private List<PeripheralEvidence> _evidence = [];
     private Dictionary<PeripheralId, PeripheralStatus> _liveStatus = [];
     private Dictionary<PeripheralId, List<(string Cmd, string Output, bool IsError, DateTimeOffset Ts)>> _cmdLog = [];
+    private Dictionary<PeripheralId, string> _verdictDetails = [];
     private bool _loaded;
 
     protected override async Task OnParametersSetAsync()
@@ -87,6 +95,7 @@ else
     {
         LiveEvents.PeripheralStatusChanged += OnPeripheralStatusChanged;
         LiveEvents.CommandProgressReceived += OnCommandProgress;
+        LiveEvents.RunStatusChanged += OnRunStatusChanged;
     }
 
     private void OnPeripheralStatusChanged(object? sender, PeripheralStatusEventArgs e)
@@ -103,7 +112,7 @@ else
     private void OnCommandProgress(object? sender, CommandProgressEventArgs e)
     {
         if (e.RunId != RunId) return;
-        _ = InvokeAsync(() =>
+        _ = InvokeAsync(async () =>
         {
             if (!_cmdLog.ContainsKey(e.PeripheralId))
                 _cmdLog[e.PeripheralId] = [];
@@ -112,6 +121,23 @@ else
             if (log.Count > 100)
                 log.RemoveAt(0);
             StateHasChanged();
+
+            // Auto-scroll the cmd-log div to the bottom
+            await Task.Yield();
+            await JS.InvokeVoidAsync("scrollToBottom", $"cmdlog-{e.PeripheralId}");
+        });
+    }
+
+    private void OnRunStatusChanged(object? sender, RunStatusEventArgs e)
+    {
+        if (e.RunId != RunId) return;
+        if (e.Status is not (RunStatus.Completed or RunStatus.Stopped)) return;
+        _ = InvokeAsync(async () =>
+        {
+            var verdicts = await RunSvc.GetVerdictsAsync(RunId);
+            foreach (var v in verdicts)
+                _verdictDetails[v.PeripheralId] = v.FailureReason ?? "\u2014";
+            StateHasChanged();
         });
     }
 
@@ -119,5 +145,6 @@ else
     {
         LiveEvents.PeripheralStatusChanged -= OnPeripheralStatusChanged;
         LiveEvents.CommandProgressReceived -= OnCommandProgress;
+        LiveEvents.RunStatusChanged -= OnRunStatusChanged;
     }
 }
