@@ -5,28 +5,25 @@ namespace ZScout.HwTest.App.Runs;
 
 /// <summary>
 /// Manual verdict service: records operator pass/fail decisions for each peripheral.
-/// Enforces FailureReason requirement on Fail outcomes and transitions run to Completed
-/// once all four peripherals have verdicts.
+/// After saving a verdict, signals the <see cref="RunOrchestrator"/> to advance to
+/// the next peripheral in the sequential run.
 /// </summary>
 public sealed class VerdictService
 {
-	private static readonly IReadOnlySet<PeripheralId> RequiredPeripherals =
-		new HashSet<PeripheralId> { PeripheralId.Gps, PeripheralId.Sdr, PeripheralId.Halow, PeripheralId.Compass };
-
 	private readonly RunRepository _runs;
 	private readonly VerdictRepository _verdicts;
-	private readonly EvidenceRepository _evidence;
+	private readonly RunOrchestrator _orchestrator;
 	private readonly ILogger<VerdictService> _logger;
 
 	public VerdictService(
 		RunRepository runs,
 		VerdictRepository verdicts,
-		EvidenceRepository evidence,
+		RunOrchestrator orchestrator,
 		ILogger<VerdictService> logger)
 	{
 		_runs = runs;
 		_verdicts = verdicts;
-		_evidence = evidence;
+		_orchestrator = orchestrator;
 		_logger = logger;
 	}
 
@@ -50,9 +47,10 @@ public sealed class VerdictService
 		if (run is null)
 			return new AssignVerdictResult(false, $"Run {request.RunId} not found.", null);
 
-		if (run.Status != RunStatus.AwaitingVerdict)
+		// Accept verdicts when the run is actively testing or awaiting a verdict
+		if (run.Status is not (RunStatus.Running or RunStatus.AwaitingVerdict))
 			return new AssignVerdictResult(false,
-				$"Run must be in AwaitingVerdict status (current: {run.Status}).", null);
+				$"Run must be in Running or AwaitingVerdict status (current: {run.Status}).", null);
 
 		var verdict = new PeripheralVerdict
 		{
@@ -70,32 +68,9 @@ public sealed class VerdictService
 			"Verdict {Outcome} assigned for {Peripheral} in run {RunId} by {User}",
 			request.Outcome, request.PeripheralId, request.RunId, request.AssignedByUserId);
 
-		// Check if all four peripherals now have verdicts → complete the run
-		await TryCompleteRunAsync(run, ct);
+		// Signal the orchestrator to advance to the next peripheral
+		_orchestrator.NotifyVerdictAssigned(request.RunId);
 
 		return new AssignVerdictResult(true, null, verdict);
-	}
-
-	private async Task TryCompleteRunAsync(TestRun run, CancellationToken ct)
-	{
-		var allVerdicts = await _verdicts.GetForRunAsync(run.RunId, ct);
-		var coveredPeripherals = allVerdicts.Select(v => v.PeripheralId).ToHashSet();
-
-		if (!RequiredPeripherals.IsSubsetOf(coveredPeripherals))
-			return; // Still waiting for more verdicts
-
-		var anyFail = allVerdicts.Any(v => v.Outcome == VerdictOutcome.Fail);
-		var overallOutcome = anyFail ? OverallOutcome.Fail : OverallOutcome.Pass;
-
-		var completed = run with
-		{
-			Status = RunStatus.Completed,
-			OverallOutcome = overallOutcome,
-			FinishedAtUtc = DateTimeOffset.UtcNow
-		};
-
-		await _runs.SaveAsync(completed, ct);
-		_logger.LogInformation(
-			"Run {RunId} completed with overall outcome: {Outcome}", run.RunId, overallOutcome);
 	}
 }

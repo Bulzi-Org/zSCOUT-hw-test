@@ -83,7 +83,7 @@ public sealed class RunCommandService
 	{
 		var run = await _runs.GetByIdAsync(runId, ct);
 		if (run is null) return "Run not found.";
-		if (run.Status is not (RunStatus.Queued or RunStatus.Running))
+		if (run.Status is not (RunStatus.Queued or RunStatus.Running or RunStatus.AwaitingVerdict))
 			return $"Run is not active (status: {run.Status}).";
 
 		// Cancel all in-flight adapter probes (e.g. GPS streaming) before persisting Stopped
@@ -93,6 +93,28 @@ public sealed class RunCommandService
 		await _runs.SaveAsync(stopped, ct);
 		await _events.PublishRunStatusAsync(runId, RunStatus.Stopped, ct);
 		return null;
+	}
+
+	/// <summary>
+	/// Stop the current peripheral test and assign an operator verdict.
+	/// Cancels the adapter, then records the pass/fail verdict which triggers
+	/// the orchestrator to advance to the next peripheral.
+	/// </summary>
+	public async Task<(bool Success, string? Error)> StopTestWithVerdictAsync(
+		string runId, PeripheralId peripheralId, VerdictOutcome outcome,
+		string? failureReason, string userId, CancellationToken ct = default)
+	{
+		// Cancel the adapter probe first so the orchestrator transitions to AwaitingVerdict
+		_orchestrator.StopTest(runId, peripheralId);
+
+		// Small yield to let the orchestrator's ProbeAdapterSafeAsync catch the cancellation
+		// and transition to AwaitingVerdict before we assign the verdict.
+		await Task.Delay(50, ct);
+
+		// Assign the verdict — VerdictService will signal the orchestrator to advance
+		var result = await _verdictService.AssignAsync(
+			new VerdictService.AssignVerdictRequest(runId, peripheralId, outcome, failureReason, userId), ct);
+		return (result.Success, result.Error);
 	}
 
 	public async Task<TestRun?> GetActiveRunAsync(CancellationToken ct = default)

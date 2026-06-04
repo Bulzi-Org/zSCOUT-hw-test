@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using ZScout.HwTest.App.Hardware.Common;
 using ZScout.HwTest.App.Persistence;
 using ZScout.HwTest.App.Streams;
@@ -8,27 +9,31 @@ namespace ZScout.HwTest.App.Runs;
 /// <summary>
 /// Orchestrates a full hardware communication test run.
 /// Executes peripheral adapters sequentially in the order defined by PeripheralId enum
-/// (Compass → GPS → SDR → HaLow). Each adapter runs until stopped by the user or
-/// until an error is detected. Supports manual per-test triggering via RunTestAsync.
+/// (Compass → GPS → SDR → HaLow). Each adapter runs until the operator stops it and
+/// assigns a verdict (Pass / Fail) before the next peripheral begins.
 /// </summary>
 public sealed class RunOrchestrator
 {
 	private readonly IEnumerable<IHardwareAdapter> _adapters;
 	private readonly RunRepository _runs;
 	private readonly EvidenceRepository _evidence;
-	private readonly VerdictRepository _verdicts;
 	private readonly LiveEventPublisher _events;
 	private readonly RunCancellationService _cancellation;
 	private readonly ILogger<RunOrchestrator> _logger;
 
 	/// <summary>Per-test CTS keyed by "runId:peripheralId". Set by the UI stop buttons.</summary>
-	private readonly Dictionary<string, CancellationTokenSource> _testCts = new();
+	private readonly ConcurrentDictionary<string, CancellationTokenSource> _testCts = new();
+
+	/// <summary>
+	/// Signals the orchestrator that a verdict has been assigned for the current peripheral.
+	/// Keyed by runId. Created before each adapter starts; completed by <see cref="NotifyVerdictAssigned"/>.
+	/// </summary>
+	private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _verdictSignals = new();
 
 	public RunOrchestrator(
 		IEnumerable<IHardwareAdapter> adapters,
 		RunRepository runs,
 		EvidenceRepository evidence,
-		VerdictRepository verdicts,
 		LiveEventPublisher events,
 		RunCancellationService cancellation,
 		ILogger<RunOrchestrator> logger)
@@ -36,7 +41,6 @@ public sealed class RunOrchestrator
 		_adapters = adapters;
 		_runs = runs;
 		_evidence = evidence;
-		_verdicts = verdicts;
 		_events = events;
 		_cancellation = cancellation;
 		_logger = logger;
@@ -44,8 +48,8 @@ public sealed class RunOrchestrator
 
 	/// <summary>
 	/// Execute the full suite for the given run sequentially.
-	/// Adapters run one at a time in PeripheralId enum order (Compass, Gps, Sdr, Halow).
-	/// Each adapter is isolated — a failure in one never affects others.
+	/// For each peripheral: start its adapter, wait for the operator to stop it and
+	/// assign a verdict, then advance to the next peripheral.
 	/// </summary>
 	public async Task ExecuteAsync(string runId, CancellationToken ct = default)
 	{
@@ -70,31 +74,85 @@ public sealed class RunOrchestrator
 			.OrderBy(a => a.PeripheralId)
 			.ToList();
 
-		var statusByPeripheral = new Dictionary<PeripheralId, PeripheralStatus>();
-
-		// Execute adapters sequentially
+		// Execute adapters sequentially — one at a time, operator-driven advancement
 		foreach (var adapter in orderedAdapters)
 		{
 			if (ct.IsCancellationRequested) break;
 
-			var (ev, status) = await ProbeAdapterSafeAsync(adapter, run, ct);
-			statusByPeripheral[ev.PeripheralId] = status;
+			// Prepare a verdict signal the operator will complete via VerdictService
+			var verdictTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+			_verdictSignals[runId] = verdictTcs;
 
-			await _evidence.SaveAsync(ev, CancellationToken.None);
-			await AssignVerdictAsync(run, ev, status, CancellationToken.None);
+			// Create a per-test CTS so Stop-Success / Stop-Fail can cancel only this adapter
+			var testKey = $"{runId}:{adapter.PeripheralId}";
+			var testCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+			_testCts[testKey] = testCts;
 
-			_logger.LogInformation(
-				"Adapter {Peripheral} completed with status {Status} in run {RunId}",
-				ev.PeripheralId, status, runId);
+			try
+			{
+				// Run the adapter until the operator cancels it
+				var (ev, status) = await ProbeAdapterSafeAsync(adapter, run, testCts.Token);
+				await _evidence.SaveAsync(ev, CancellationToken.None);
+
+				_logger.LogInformation(
+					"Adapter {Peripheral} stopped in run {RunId} — awaiting operator verdict",
+					adapter.PeripheralId, runId);
+
+				// Transition to AwaitingVerdict so VerdictService accepts the verdict
+				run = run with { Status = RunStatus.AwaitingVerdict };
+				await _runs.SaveAsync(run, CancellationToken.None);
+				await _events.PublishRunStatusAsync(runId, RunStatus.AwaitingVerdict, CancellationToken.None);
+
+				// Wait for the operator to assign a verdict before advancing
+				using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+				await using (waitCts.Token.Register(() => verdictTcs.TrySetCanceled()))
+				{
+					await verdictTcs.Task;
+				}
+
+				// Transition back to Running for the next peripheral
+				run = run with { Status = RunStatus.Running };
+				await _runs.SaveAsync(run, CancellationToken.None);
+				await _events.PublishRunStatusAsync(runId, RunStatus.Running, CancellationToken.None);
+			}
+			catch (OperationCanceledException) when (ct.IsCancellationRequested)
+			{
+				_logger.LogInformation("Run {RunId} cancelled during {Peripheral}", runId, adapter.PeripheralId);
+				break;
+			}
+			finally
+			{
+				_testCts.TryRemove(testKey, out _);
+				testCts.Dispose();
+				_verdictSignals.TryRemove(runId, out _);
+			}
 		}
 
-		// Unregister CTS now that all probes are done
+		// Unregister run-level CTS now that all probes are done
 		_cancellation.Unregister(runId);
 
-		// Complete the run with overall outcome
-		await CompleteRunAsync(run, statusByPeripheral, CancellationToken.None);
+		// If the run wasn't stopped externally, mark it as completed
+		if (!ct.IsCancellationRequested)
+		{
+			var completed = run with
+			{
+				Status = RunStatus.Completed,
+				FinishedAtUtc = DateTimeOffset.UtcNow
+			};
+			await _runs.SaveAsync(completed, CancellationToken.None);
+			await _events.PublishRunStatusAsync(runId, RunStatus.Completed, CancellationToken.None);
+			_logger.LogInformation("Run {RunId} completed", runId);
+		}
+	}
 
-		_logger.LogInformation("Run {RunId} completed with auto-assigned verdicts", runId);
+	/// <summary>
+	/// Signals the orchestrator that a verdict has been assigned for the current peripheral,
+	/// allowing advancement to the next one.
+	/// </summary>
+	public void NotifyVerdictAssigned(string runId)
+	{
+		if (_verdictSignals.TryGetValue(runId, out var tcs))
+			tcs.TrySetResult(true);
 	}
 
 	/// <summary>
@@ -118,12 +176,11 @@ public sealed class RunOrchestrator
 		{
 			var (ev, status) = await ProbeAdapterSafeAsync(adapter, run, testCts.Token);
 			await _evidence.SaveAsync(ev, CancellationToken.None);
-			await AssignVerdictAsync(run, ev, status, CancellationToken.None);
 			return (ev, status);
 		}
 		finally
 		{
-			_testCts.Remove(testKey);
+			_testCts.TryRemove(testKey, out _);
 			testCts.Dispose();
 		}
 	}
@@ -195,63 +252,5 @@ public sealed class RunOrchestrator
 		};
 
 		return (evidence, envelope.Status);
-	}
-
-	/// <summary>
-	/// Assigns a verdict for a single adapter result immediately upon completion.
-	/// Ready → Pass, Degraded/Unavailable → Fail.
-	/// </summary>
-	private async Task AssignVerdictAsync(
-		TestRun run,
-		PeripheralEvidence ev,
-		PeripheralStatus status,
-		CancellationToken ct)
-	{
-		var outcome = status == PeripheralStatus.Ready
-			? VerdictOutcome.Pass
-			: VerdictOutcome.Fail;
-
-		string? failureReason = outcome == VerdictOutcome.Fail
-			? ev.DiagnosticMessages.Count > 0
-				? ev.DiagnosticMessages[^1]
-				: $"{status}"
-			: null;
-
-		var verdict = new PeripheralVerdict
-		{
-			VerdictId = Guid.NewGuid().ToString("N"),
-			RunId = run.RunId,
-			PeripheralId = ev.PeripheralId,
-			Outcome = outcome,
-			FailureReason = failureReason,
-			AssignedByUserId = "system",
-			AssignedAtUtc = DateTimeOffset.UtcNow
-		};
-
-		await _verdicts.SaveAsync(verdict, ct);
-		_logger.LogInformation(
-			"Auto-verdict {Outcome} assigned for {Peripheral} in run {RunId}",
-			outcome, ev.PeripheralId, run.RunId);
-	}
-
-	/// <summary>
-	/// Completes the run with an overall outcome computed from all adapter statuses.
-	/// </summary>
-	private async Task CompleteRunAsync(
-		TestRun run,
-		Dictionary<PeripheralId, PeripheralStatus> statusByPeripheral,
-		CancellationToken ct)
-	{
-		var anyFail = statusByPeripheral.Values.Any(s => s != PeripheralStatus.Ready);
-		var overallOutcome = anyFail ? OverallOutcome.Fail : OverallOutcome.Pass;
-		var completed = run with
-		{
-			Status = RunStatus.Completed,
-			OverallOutcome = overallOutcome,
-			FinishedAtUtc = DateTimeOffset.UtcNow
-		};
-
-		await _runs.SaveAsync(completed, ct);
-		await _events.PublishRunStatusAsync(run.RunId, RunStatus.Completed, ct);
 	}
 }
