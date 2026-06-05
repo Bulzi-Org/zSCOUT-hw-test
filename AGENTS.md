@@ -41,6 +41,7 @@ Board: https://github.com/orgs/Bulzi-Org/projects/1
 ## Conventions
 - Do not add co-author lines to commit messages
 - PR branches: `fix/<issue>-<short-desc>` or `feat/<issue>-<short-desc>`
+- **Worktrees** must be created in `~/GitHub/Bulzi-Org/zSCOUT/worktrees/` — NEVER in the repo root or submodule directories. Naming: `<repo-short>-<type><issue>` (e.g. `hw-test-fix65`)
 
 
 ## Parent Project Rules
