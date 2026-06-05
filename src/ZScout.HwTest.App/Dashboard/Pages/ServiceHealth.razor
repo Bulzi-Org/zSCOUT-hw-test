@@ -1,0 +1,281 @@
+@page "/service-health"
+@rendermode InteractiveServer
+@using System.Diagnostics
+@using System.Net.Http.Json
+@using ZScout.HwTest.App.Hardware.Common
+@inject IConfiguration Config
+@inject IHttpClientFactory HttpClientFactory
+@implements IDisposable
+
+<PageTitle>Service Health – zSCOUT</PageTitle>
+
+<h4 class="mb-3">Service Health Status</h4>
+<p class="text-muted small mb-3">Live service checks with automatic refresh.</p>
+
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <span class="text-muted small">Refresh interval: @_intervalSeconds s</span>
+    <span class="text-muted small">Next refresh in @_secondsUntilRefresh s</span>
+</div>
+
+<div class="card">
+    <div class="card-body p-0">
+        <div style="max-height:600px; overflow-y:auto;">
+            <table class="table table-sm table-hover font-monospace mb-0" style="font-size:0.85rem">
+                <thead class="table-dark sticky-top">
+                    <tr>
+                        <th>Service</th>
+                        <th>Endpoint</th>
+                        <th>Status</th>
+                        <th>Response Time</th>
+                        <th>Last Checked (UTC)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var service in _services)
+                    {
+                        <tr>
+                            <td>@service.Name</td>
+                            <td>@service.EndpointDisplay</td>
+                            <td>
+                                <span class="badge @GetBadgeClass(service.Status)">@service.Status</span>
+                            </td>
+                            <td>@(service.ResponseTimeMs.HasValue ? $"{service.ResponseTimeMs.Value} ms" : "—")</td>
+                            <td>@(service.LastCheckedUtc.HasValue ? service.LastCheckedUtc.Value.ToString("yyyy-MM-dd HH:mm:ss") : "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code {
+    private readonly List<ServiceHealthState> _services = [];
+    private readonly SemaphoreSlim _refreshLock = new(1, 1);
+
+    private Timer? _refreshTimer;
+    private Timer? _countdownTimer;
+
+    private int _intervalSeconds = 10;
+    private int _secondsUntilRefresh = 10;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var section = Config.GetSection("ServiceHealth");
+
+        _intervalSeconds = Math.Max(1, section.GetValue("IntervalSeconds", 10));
+        _secondsUntilRefresh = _intervalSeconds;
+
+        var configured = section.GetSection("Services").Get<List<ServiceHealthConfig>>();
+        if (configured is { Count: > 0 })
+        {
+            _services.AddRange(configured.Select(MapConfig));
+        }
+        else
+        {
+            _services.AddRange(GetDefaultServices());
+        }
+
+        await RefreshAllAsync();
+
+        _refreshTimer = new Timer(
+            static async state =>
+            {
+                if (state is ServiceHealth page)
+                {
+                    await page.RunRefreshTickAsync();
+                }
+            },
+            this,
+            TimeSpan.FromSeconds(_intervalSeconds),
+            TimeSpan.FromSeconds(_intervalSeconds));
+
+        _countdownTimer = new Timer(
+            static state =>
+            {
+                if (state is ServiceHealth page)
+                {
+                    page.RunCountdownTick();
+                }
+            },
+            this,
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(1));
+    }
+
+    private async Task RunRefreshTickAsync()
+    {
+        _secondsUntilRefresh = _intervalSeconds;
+        await RefreshAllAsync();
+    }
+
+    private void RunCountdownTick()
+    {
+        _secondsUntilRefresh = Math.Max(0, _secondsUntilRefresh - 1);
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task RefreshAllAsync()
+    {
+        if (!await _refreshLock.WaitAsync(0))
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (var service in _services)
+            {
+                await CheckServiceAsync(service);
+            }
+
+            await InvokeAsync(StateHasChanged);
+        }
+        finally
+        {
+            _refreshLock.Release();
+        }
+    }
+
+    private async Task CheckServiceAsync(ServiceHealthState service)
+    {
+        var sw = Stopwatch.StartNew();
+        service.Status = ServiceStatus.Checking;
+        service.LastCheckedUtc = DateTime.UtcNow;
+
+        try
+        {
+            if (service.CheckType.Equals("Http", StringComparison.OrdinalIgnoreCase))
+            {
+                var http = HttpClientFactory.CreateClient();
+                http.Timeout = TimeSpan.FromSeconds(5);
+
+                using var response = await http.GetAsync(service.HttpUrl);
+                service.ResponseTimeMs = sw.ElapsedMilliseconds;
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    service.Status = ServiceStatus.Unhealthy;
+                    return;
+                }
+
+                if (service.Name.Equals("gps-svc", StringComparison.OrdinalIgnoreCase))
+                {
+                    var payload = await response.Content.ReadFromJsonAsync<GpsStatusResponse>();
+                    service.Status = MapGpsStatus(payload?.status);
+                }
+                else
+                {
+                    service.Status = ServiceStatus.Healthy;
+                }
+            }
+            else
+            {
+                var ok = await TcpHealthCheck.CheckAsync(service.Host, service.Port, 5_000);
+                service.ResponseTimeMs = sw.ElapsedMilliseconds;
+                service.Status = ok ? ServiceStatus.Healthy : ServiceStatus.Unhealthy;
+            }
+        }
+        catch
+        {
+            service.ResponseTimeMs = sw.ElapsedMilliseconds;
+            service.Status = ServiceStatus.Unhealthy;
+        }
+        finally
+        {
+            service.LastCheckedUtc = DateTime.UtcNow;
+        }
+    }
+
+    private static ServiceStatus MapGpsStatus(string? status)
+    {
+        if (string.IsNullOrWhiteSpace(status))
+            return ServiceStatus.Unknown;
+
+        return status.Trim().ToLowerInvariant() switch
+        {
+            "ok" => ServiceStatus.Healthy,
+            "healthy" => ServiceStatus.Healthy,
+            "degraded" => ServiceStatus.Degraded,
+            "warning" => ServiceStatus.Degraded,
+            "unhealthy" => ServiceStatus.Unhealthy,
+            "error" => ServiceStatus.Unhealthy,
+            _ => ServiceStatus.Unknown
+        };
+    }
+
+    private static string GetBadgeClass(ServiceStatus status) => status switch
+    {
+        ServiceStatus.Healthy => "bg-success",
+        ServiceStatus.Degraded => "bg-warning text-dark",
+        ServiceStatus.Unhealthy => "bg-danger",
+        ServiceStatus.Checking => "bg-secondary",
+        _ => "bg-secondary"
+    };
+
+    private static ServiceHealthState MapConfig(ServiceHealthConfig cfg)
+    {
+        var checkType = string.IsNullOrWhiteSpace(cfg.CheckType) ? "Http" : cfg.CheckType;
+        return new ServiceHealthState
+        {
+            Name = cfg.Name ?? "unknown",
+            Host = cfg.Host ?? "localhost",
+            Port = cfg.Port,
+            HealthPath = cfg.HealthPath,
+            CheckType = checkType
+        };
+    }
+
+    private static IEnumerable<ServiceHealthState> GetDefaultServices() =>
+    [
+        new() { Name = "gps-svc", Host = "localhost", Port = 5200, HealthPath = "/api/status", CheckType = "Http" },
+        new() { Name = "compass-svc", Host = "localhost", Port = 5100, CheckType = "Tcp" },
+        new() { Name = "sdr-svc", Host = "localhost", Port = 5101, CheckType = "Tcp" },
+        new() { Name = "hw-test", Host = "localhost", Port = 5000, HealthPath = "/health", CheckType = "Http" }
+    ];
+
+    public void Dispose()
+    {
+        _refreshTimer?.Dispose();
+        _countdownTimer?.Dispose();
+        _refreshLock.Dispose();
+    }
+
+    private sealed class ServiceHealthConfig
+    {
+        public string? Name { get; set; }
+        public string? Host { get; set; }
+        public int Port { get; set; }
+        public string? HealthPath { get; set; }
+        public string? CheckType { get; set; }
+    }
+
+    private sealed class ServiceHealthState
+    {
+        public string Name { get; set; } = "unknown";
+        public string Host { get; set; } = "localhost";
+        public int Port { get; set; }
+        public string? HealthPath { get; set; }
+        public string CheckType { get; set; } = "Http";
+        public ServiceStatus Status { get; set; } = ServiceStatus.Unknown;
+        public long? ResponseTimeMs { get; set; }
+        public DateTime? LastCheckedUtc { get; set; }
+
+        public string EndpointDisplay => $"{Host}:{Port}";
+        public string HttpUrl => $"http://{Host}:{Port}{(string.IsNullOrWhiteSpace(HealthPath) ? "/" : HealthPath)}";
+    }
+
+    private sealed class GpsStatusResponse
+    {
+        public string? status { get; set; }
+    }
+
+    private enum ServiceStatus
+    {
+        Unknown,
+        Checking,
+        Healthy,
+        Degraded,
+        Unhealthy
+    }
+}
