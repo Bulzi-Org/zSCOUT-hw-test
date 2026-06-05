@@ -41,3 +41,18 @@ Board: https://github.com/orgs/Bulzi-Org/projects/1
 ## Conventions
 - Do not add co-author lines to commit messages
 - PR branches: `fix/<issue>-<short-desc>` or `feat/<issue>-<short-desc>`
+
+
+## Parent Project Rules
+
+This repository is a submodule of the zSCOUT parent project at `~/GitHub/Bulzi-Org/zSCOUT/`.
+Before starting any work, read and follow the project-wide rules in the parent repository:
+
+**File:** `../AGENTS.md` (or `~/GitHub/Bulzi-Org/zSCOUT/AGENTS.md`)
+
+The parent AGENTS.md contains critical instructions for:
+- Kanban board updates (project board status transitions)
+- WSL working directory requirements
+- Cross-repo orchestration conventions
+
+These parent rules apply to ALL zSCOUT submodule repositories and must be followed in addition to this file's repo-specific rules.
