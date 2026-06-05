@@ -3,6 +3,7 @@
 @inject RunCommandService RunSvc
 @inject LiveEventPublisher LiveEvents
 @inject IJSRuntime JS
+@inject VerdictRepository VerdictRepo
 @implements IDisposable
 
 <PageTitle>Control – zSCOUT</PageTitle>
@@ -34,7 +35,7 @@
                 </div>
                 <div>
                     <label class="form-label mb-1">Tests</label>
-                    @foreach (var pid in _allPeripherals)
+                    @foreach (var pid in _runTests)
                     {
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" id="chk-@pid"
@@ -70,7 +71,7 @@ else
 
     @* ── Test list (vertical run flow) ──────────────────────────── *@
     <div class="run-flow-list mb-4">
-        @foreach (var pid in _allPeripherals)
+        @foreach (var pid in _runTests)
         {
             var testStatus = _testStatuses.TryGetValue(pid, out var ts) ? ts : "Pending";
             var errorReason = _testErrors.TryGetValue(pid, out var err) ? err : null;
@@ -172,6 +173,8 @@ else
 @code {
     private static readonly PeripheralId[] _allPeripherals = Enum.GetValues<PeripheralId>();
 
+    private PeripheralId[] _runTests = _allPeripherals;
+
     private TestRun? _activeRun;
     private RunMode _selectedMode = RunMode.Container;
     private HashSet<PeripheralId> _selectedTests = new(_allPeripherals);
@@ -199,6 +202,27 @@ else
     private async Task RefreshAsync()
     {
         _activeRun = await RunSvc.GetActiveRunAsync();
+
+        if (_activeRun is not null)
+        {
+            _runTests = _activeRun.SelectedTests.Count > 0
+                ? _activeRun.SelectedTests.ToArray()
+                : _allPeripherals;
+            _testStatuses = _runTests.ToDictionary(p => p, _ => "Pending");
+            var verdicts = await RunSvc.GetVerdictsAsync(_activeRun.RunId);
+            foreach (var v in verdicts)
+            {
+                _testStatuses[v.PeripheralId] = v.Outcome == VerdictOutcome.Pass ? "Pass" : "Fail";
+                _verdictDetails[v.PeripheralId] = v.FailureReason ?? "\u2014";
+            }
+            if (_activeRun.Status is RunStatus.Running)
+            {
+                foreach (var pid in _runTests)
+                {
+                    if (_testStatuses[pid] == "Pending") { _testStatuses[pid] = "Running"; _currentTest = pid; break; }
+                }
+            }
+        }
     }
 
     private void ToggleTest(PeripheralId pid, bool selected)
@@ -211,7 +235,6 @@ else
     {
         _busy = true;
         _errorMsg = null;
-        _testStatuses = _allPeripherals.ToDictionary(p => p, _ => "Pending");
         _testErrors.Clear();
         _verdictDetails.Clear();
         _logEntries.Clear();
@@ -220,9 +243,14 @@ else
 
         try
         {
-            var (run, err) = await RunSvc.StartRunAsync(_selectedMode, "dashboard");
+            var (run, err) = await RunSvc.StartRunAsync(_selectedMode, "dashboard", _selectedTests);
             if (err is not null) _errorMsg = err;
-            else _activeRun = run;
+            else
+            {
+                _activeRun = run;
+                _runTests = run!.SelectedTests.Count > 0 ? run.SelectedTests.ToArray() : _allPeripherals;
+                _testStatuses = _runTests.ToDictionary(p => p, _ => "Pending");
+            }
         }
         finally { _busy = false; }
     }
@@ -348,7 +376,12 @@ else
         if (_activeRun is null || e.RunId != _activeRun.RunId) return;
         _ = InvokeAsync(async () =>
         {
-            // Update current test if this is the one producing output
+            // Clear log when switching to a different test
+            if (e.PeripheralId != _currentTest)
+            {
+                _logEntries.Clear();
+                _summaryValues.Clear();
+            }
             _currentTest = e.PeripheralId;
             _testStatuses[e.PeripheralId] = "Running";
 

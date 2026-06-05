@@ -28,6 +28,7 @@ builder.Services.AddSingleton<EvidenceRepository>();
 builder.Services.AddSingleton<VerdictRepository>();
 builder.Services.AddSingleton<TelemetryStreamRepository>();
 builder.Services.AddSingleton<ExportJobRepository>();
+builder.Services.AddSingleton<CommandLogRepository>();
 builder.Services.AddSingleton<RetentionPolicy>();
 builder.Services.AddHostedService<RetentionPrunerService>();
 builder.Services.AddSingleton<ExportService>();

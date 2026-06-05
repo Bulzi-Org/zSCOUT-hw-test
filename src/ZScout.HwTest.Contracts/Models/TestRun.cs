@@ -14,6 +14,7 @@ public sealed record TestRun
 	public required RunStatus Status { get; init; }
 	public required string RequestedByUserId { get; init; }
 	public required RunConfiguration Configuration { get; init; }
+	public IReadOnlyList<PeripheralId> SelectedTests { get; init; } = [];
 	public DateTimeOffset? StartedAtUtc { get; init; }
 	public DateTimeOffset? FinishedAtUtc { get; init; }
 	public string? RejectionReason { get; init; }

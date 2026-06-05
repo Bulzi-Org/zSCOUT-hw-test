@@ -45,7 +45,8 @@ public sealed class RunCommandService
 
 	/// <summary>Start a new run; returns (run, null) on success or (null, errorMsg) on conflict.</summary>
 	public async Task<(TestRun? Run, string? Error)> StartRunAsync(
-		RunMode mode, string userId, CancellationToken ct = default)
+		RunMode mode, string userId, IReadOnlySet<PeripheralId> selectedTests,
+		CancellationToken ct = default)
 	{
 		var (canStart, active) = await _lockService.TryAcquireAsync(ct);
 		if (!canStart)
@@ -59,6 +60,7 @@ public sealed class RunCommandService
 			Status = RunStatus.Queued,
 			RequestedByUserId = userId,
 			Configuration = cfg,
+			SelectedTests = selectedTests.OrderBy(p => p).ToList(),
 			StartedAtUtc = DateTimeOffset.UtcNow
 		};
 
