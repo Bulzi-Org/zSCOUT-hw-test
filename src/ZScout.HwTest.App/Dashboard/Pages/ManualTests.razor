@@ -19,7 +19,7 @@
         </h2>
         <div id="collapseGps" class="accordion-collapse collapse show" aria-labelledby="headingGps" data-bs-parent="#manualTestAccordion">
             <div class="accordion-body">
-                <p class="small text-muted">Confirm the FT232 USB-to-TTL adapter is plugged in and GPS module TX→adapter RX.</p>
+                <p class="small text-muted">GPS runs inside the <code>zscout-gps-svc</code> container (Tier 2). Confirm the FT232 USB-to-TTL adapter is plugged in and GPS module TX→adapter RX.</p>
 
                 <h6>Host OS Shell</h6>
                 @foreach (var cmd in GpsHostCommands)
@@ -30,7 +30,7 @@
                     </div>
                 }
 
-                <h6 class="mt-3">Container Shell</h6>
+                <h6 class="mt-3">Container Shell (via docker exec)</h6>
                 @foreach (var cmd in GpsContainerCommands)
                 {
                     <div class="d-flex align-items-start gap-2 mb-2">
@@ -146,20 +146,20 @@
         await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
     }
 
-    // GPS commands
+    // GPS commands — Tier 2: gpsd runs inside zscout-gps-svc container, REST API on :5200
     private static readonly string[] GpsHostCommands =
     [
-        "pgrep -x gpsd && echo PASS || echo FAIL",
-        "ss -lnp | grep gpsd",
-        "gpspipe -r -n 5 -w",
-        "grep DEVICES /etc/default/gpsd"
+        "docker ps --filter name=zscout-gps-svc --format '{{.Status}}'",
+        "curl -s http://localhost:5200/api/status",
+        "curl -s http://localhost:5200/api/fix | python3 -m json.tool",
+        "ss -tlnp | grep :5200"
     ];
 
     private static readonly string[] GpsContainerCommands =
     [
-        "pgrep -x gpsd && echo PASS || echo FAIL",
-        "gpspipe -r -n 5 -w",
-        "gpspipe -r -n 1 -w"
+        "docker exec zscout-gps-svc pgrep -x gpsd && echo PASS || echo FAIL",
+        "docker exec zscout-gps-svc gpspipe -r -n 5 -w",
+        "docker exec zscout-gps-svc gpspipe -r -n 1 -w"
     ];
 
     // SDR commands
