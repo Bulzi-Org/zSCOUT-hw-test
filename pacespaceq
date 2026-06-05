@@ -19,7 +19,6 @@ public sealed class RunOrchestrator
 	private readonly EvidenceRepository _evidence;
 	private readonly LiveEventPublisher _events;
 	private readonly RunCancellationService _cancellation;
-	private readonly CommandLogRepository _commandLog;
 	private readonly ILogger<RunOrchestrator> _logger;
 
 	/// <summary>Per-test CTS keyed by "runId:peripheralId". Set by the UI stop buttons.</summary>
@@ -35,7 +34,6 @@ public sealed class RunOrchestrator
 		IEnumerable<IHardwareAdapter> adapters,
 		RunRepository runs,
 		EvidenceRepository evidence,
-		CommandLogRepository commandLog,
 		LiveEventPublisher events,
 		RunCancellationService cancellation,
 		ILogger<RunOrchestrator> logger)
@@ -43,7 +41,6 @@ public sealed class RunOrchestrator
 		_adapters = adapters;
 		_runs = runs;
 		_evidence = evidence;
-		_commandLog = commandLog;
 		_events = events;
 		_cancellation = cancellation;
 		_logger = logger;
@@ -73,12 +70,7 @@ public sealed class RunOrchestrator
 		using var scope = _logger.BeginScope(new Dictionary<string, object> { ["RunId"] = runId, ["RunMode"] = run.Mode.ToString() });
 
 		// Build ordered adapter list following PeripheralId enum order
-		var selectedSet = run.SelectedTests.Count > 0
-			? new HashSet<PeripheralId>(run.SelectedTests)
-			: null; // null = run all (backward compat)
-
 		var orderedAdapters = _adapters
-			.Where(a => selectedSet is null || selectedSet.Contains(a.PeripheralId))
 			.OrderBy(a => a.PeripheralId)
 			.ToList();
 
@@ -214,19 +206,7 @@ public sealed class RunOrchestrator
 		_logger.LogDebug("Probing {Peripheral}...", adapter.PeripheralId);
 
 		Func<string, string, bool, Task> reportStep = async (cmd, output, isError) =>
-		{
 			await _events.PublishCommandProgressAsync(run.RunId, adapter.PeripheralId, cmd, output, isError, ct);
-			await _commandLog.SaveAsync(new CommandLogEntry
-			{
-				LogEntryId = Guid.NewGuid().ToString("N"),
-				RunId = run.RunId,
-				PeripheralId = adapter.PeripheralId,
-				Timestamp = DateTimeOffset.UtcNow,
-				Command = cmd,
-				Output = output,
-				IsError = isError
-			}, CancellationToken.None);
-		};
 
 		DiagnosticEnvelope envelope;
 		try

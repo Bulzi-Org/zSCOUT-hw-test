@@ -93,3 +93,22 @@ public sealed class TelemetryStreamRepository : FileBackedRepository<TelemetrySt
 		return all.Where(r => r.RunId == runId && r.PeripheralId == peripheralId).ToList();
 	}
 }
+
+public sealed class CommandLogRepository : FileBackedRepository<CommandLogEntry>
+{
+	public CommandLogRepository(IConfiguration config) : base(
+		config["DataDirectory"] ?? Path.Combine(AppContext.BaseDirectory, "data"),
+		"command-log.json")
+	{ }
+
+	protected override string GetId(CommandLogEntry entity) => entity.LogEntryId;
+
+	public async Task<IReadOnlyList<CommandLogEntry>> GetForRunPeripheralAsync(
+		string runId, PeripheralId peripheralId, CancellationToken ct = default)
+	{
+		var all = await GetAllAsync(ct);
+		return all.Where(e => e.RunId == runId && e.PeripheralId == peripheralId)
+			.OrderBy(e => e.Timestamp)
+			.ToList();
+	}
+}

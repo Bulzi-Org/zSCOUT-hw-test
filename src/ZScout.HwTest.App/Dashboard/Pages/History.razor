@@ -3,6 +3,7 @@
 @inject RunCommandService RunSvc
 @inject EvidenceRepository EvidenceRepo
 @inject VerdictRepository VerdictRepo
+@inject CommandLogRepository CommandLogRepo
 @inject ExportService ExportSvc
 @inject RetentionPolicy Retention
 
@@ -46,13 +47,7 @@ else
     <table class="table table-sm table-hover">
         <thead>
             <tr>
-                <th>Run ID</th>
-                <th>Mode</th>
-                <th>Status</th>
-                <th>Outcome</th>
-                <th>Started</th>
-                <th>Finished</th>
-                <th></th>
+                <th>Run ID</th><th>Mode</th><th>Status</th><th>Outcome</th><th>Started</th><th>Finished</th><th></th>
             </tr>
         </thead>
         <tbody>
@@ -65,16 +60,13 @@ else
                     <td>
                         @if (r.OverallOutcome.HasValue)
                         {
-                            <span class="badge @(r.OverallOutcome == OverallOutcome.Pass ? "bg-success" : "bg-danger")">
-                                @r.OverallOutcome
-                            </span>
+                            <span class="badge @(r.OverallOutcome == OverallOutcome.Pass ? "bg-success" : "bg-danger")">@r.OverallOutcome</span>
                         }
                     </td>
                     <td class="small text-muted">@r.StartedAtUtc?.ToString("yyyy-MM-dd HH:mm")</td>
                     <td class="small text-muted">@r.FinishedAtUtc?.ToString("HH:mm")</td>
                     <td>
-                        <button class="btn btn-sm btn-outline-secondary py-0"
-                                @onclick="() => ToggleDetails(r.RunId)">
+                        <button class="btn btn-sm btn-outline-secondary py-0" @onclick="() => ToggleDetails(r.RunId)">
                             @(_expandedRunId == r.RunId ? "▲ Hide" : "▼ Details")
                         </button>
                     </td>
@@ -92,11 +84,8 @@ else
                                             <tbody>
                                                 @foreach (var ev in _drilldown.Evidence)
                                                 {
-                                                    <tr>
-                                                        <td>@ev.PeripheralId</td>
-                                                        <td>@ev.SampleCount</td>
-                                                        <td>@(ev.DependencyAvailable ? "✓" : "✗")</td>
-                                                        <td class="small">@ev.LastSampleAtUtc?.ToString("HH:mm:ss")</td>
+                                                    <tr class="@(_selectedLogPeripheral == ev.PeripheralId ? "table-active" : "")" style="cursor:pointer" @onclick="() => ToggleCommandLog(r.RunId, ev.PeripheralId)">
+                                                        <td>@ev.PeripheralId</td><td>@ev.SampleCount</td><td>@(ev.DependencyAvailable ? "✓" : "✗")</td><td class="small">@ev.LastSampleAtUtc?.ToString("HH:mm:ss")</td>
                                                     </tr>
                                                 }
                                             </tbody>
@@ -109,13 +98,9 @@ else
                                             <tbody>
                                                 @foreach (var vd in _drilldown.Verdicts)
                                                 {
-                                                    <tr>
+                                                    <tr class="@(_selectedLogPeripheral == vd.PeripheralId ? "table-active" : "")" style="cursor:pointer" @onclick="() => ToggleCommandLog(r.RunId, vd.PeripheralId)">
                                                         <td>@vd.PeripheralId</td>
-                                                        <td>
-                                                            <span class="badge @(vd.Outcome == VerdictOutcome.Pass ? "bg-success" : "bg-danger")">
-                                                                @vd.Outcome
-                                                            </span>
-                                                        </td>
+                                                        <td><span class="badge @(vd.Outcome == VerdictOutcome.Pass ? "bg-success" : "bg-danger")">@vd.Outcome</span></td>
                                                         <td class="small text-muted">@vd.FailureReason</td>
                                                     </tr>
                                                 }
@@ -123,6 +108,33 @@ else
                                         </table>
                                     </div>
                                 </div>
+                                @if (_selectedLogPeripheral is not null && _commandLogEntries is not null)
+                                {
+                                    <div class="mt-3">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <strong>Command Log — @_selectedLogPeripheral</strong>
+                                            <button class="btn btn-sm btn-outline-secondary py-0" @onclick="() => { _selectedLogPeripheral = null; _commandLogEntries = null; }">✕ Close</button>
+                                        </div>
+                                        @if (_commandLogEntries.Count == 0)
+                                        {
+                                            <div class="alert alert-info py-2 mb-0">No command log entries recorded for this test.</div>
+                                        }
+                                        else
+                                        {
+                                            <div class="test-scroll-log" style="max-height:400px; overflow-y:auto;">
+                                                @foreach (var entry in _commandLogEntries)
+                                                {
+                                                    <div class="log-entry @(entry.IsError ? "error" : "")">
+                                                        <span class="log-ts">[@entry.Timestamp.ToString("HH:mm:ss.fff")]</span>
+                                                        <span class="log-cmd">@entry.Command</span>
+                                                        <span class="log-sep">→</span>
+                                                        <span class="log-out">@entry.Output</span>
+                                                    </div>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                }
                             </div>
                         </td>
                     </tr>
@@ -132,126 +144,72 @@ else
     </table>
 }
 
-<!-- Export panel -->
 <div class="card mt-4" style="max-width:500px">
     <div class="card-body">
         <h6 class="card-title">Export Retained Data</h6>
-        @if (_exportError is not null)
-        {
-            <div class="alert alert-danger py-2 mb-2">@_exportError</div>
-        }
-        @if (_exportJob is not null)
-        {
-            <div class="alert alert-success py-2 mb-2">
-                Export ready — <a href="/api/exports/@_exportJob.ExportJobId/download">
-                    Download ZIP
-                </a>
-            </div>
-        }
+        @if (_exportError is not null) { <div class="alert alert-danger py-2 mb-2">@_exportError</div> }
+        @if (_exportJob is not null) { <div class="alert alert-success py-2 mb-2">Export ready — <a href="/api/exports/@_exportJob.ExportJobId/download">Download ZIP</a></div> }
         <div class="d-flex gap-2 align-items-end flex-wrap">
-            <div>
-                <label class="form-label mb-1">From</label>
-                <input type="date" class="form-control form-control-sm" @bind="_exportFrom" />
-            </div>
-            <div>
-                <label class="form-label mb-1">To</label>
-                <input type="date" class="form-control form-control-sm" @bind="_exportTo" />
-            </div>
-            <button class="btn btn-primary btn-sm align-self-end"
-                    @onclick="CreateExportAsync" disabled="@_exportBusy">
-                @if (_exportBusy)
-                {
-                    <span class="spinner-border spinner-border-sm me-1"></span>
-                }
-                Export ZIP
+            <div><label class="form-label mb-1">From</label><input type="date" class="form-control form-control-sm" @bind="_exportFrom" /></div>
+            <div><label class="form-label mb-1">To</label><input type="date" class="form-control form-control-sm" @bind="_exportTo" /></div>
+            <button class="btn btn-primary btn-sm align-self-end" @onclick="CreateExportAsync" disabled="@_exportBusy">
+                @if (_exportBusy) { <span class="spinner-border spinner-border-sm me-1"></span> } Export ZIP
             </button>
         </div>
     </div>
 </div>
 
 @code {
-    private List<TestRun> _allRuns = [];
-    private List<TestRun> _filtered = [];
-
-    private string _modeFilter = "";
-    private DateTime _fromFilter;
-    private DateTime _toFilter;
-
-    private string? _expandedRunId;
-    private DrilldownData? _drilldown;
-
-    private DateTime _exportFrom;
-    private DateTime _exportTo;
-    private bool _exportBusy;
-    private string? _exportError;
-    private ExportJob? _exportJob;
+    private List<TestRun> _allRuns = []; private List<TestRun> _filtered = [];
+    private string _modeFilter = ""; private DateTime _fromFilter; private DateTime _toFilter;
+    private string? _expandedRunId; private DrilldownData? _drilldown;
+    private PeripheralId? _selectedLogPeripheral; private IReadOnlyList<CommandLogEntry>? _commandLogEntries;
+    private DateTime _exportFrom; private DateTime _exportTo; private bool _exportBusy; private string? _exportError; private ExportJob? _exportJob;
 
     protected override async Task OnInitializedAsync()
     {
         _allRuns = (await RunSvc.GetRecentRunsAsync(200)).ToList();
-        _fromFilter = Retention.CutoffUtc.DateTime;
-        _toFilter = DateTime.UtcNow;
-        _exportFrom = _fromFilter;
-        _exportTo = _toFilter;
-        ApplyFilter();
+        _fromFilter = Retention.CutoffUtc.DateTime; _toFilter = DateTime.UtcNow;
+        _exportFrom = _fromFilter; _exportTo = _toFilter; ApplyFilter();
     }
 
     private void ApplyFilter()
     {
         var from = new DateTimeOffset(_fromFilter, TimeSpan.Zero);
         var to = new DateTimeOffset(_toFilter, TimeSpan.Zero).AddDays(1);
-
         _filtered = _allRuns
-            .Where(r =>
-                (string.IsNullOrEmpty(_modeFilter) || r.Mode.ToString() == _modeFilter) &&
+            .Where(r => (string.IsNullOrEmpty(_modeFilter) || r.Mode.ToString() == _modeFilter) &&
                 (r.StartedAtUtc is null || (r.StartedAtUtc >= from && r.StartedAtUtc <= to)))
-            .OrderByDescending(r => r.StartedAtUtc)
-            .ToList();
+            .OrderByDescending(r => r.StartedAtUtc).ToList();
     }
 
     private async Task ToggleDetails(string runId)
     {
-        if (_expandedRunId == runId)
-        {
-            _expandedRunId = null;
-            _drilldown = null;
-            return;
-        }
-        _expandedRunId = runId;
-        var evidence = await EvidenceRepo.GetForRunAsync(runId);
-        var verdicts = await VerdictRepo.GetForRunAsync(runId);
-        _drilldown = new DrilldownData(evidence, verdicts);
+        if (_expandedRunId == runId) { _expandedRunId = null; _drilldown = null; _selectedLogPeripheral = null; _commandLogEntries = null; return; }
+        _expandedRunId = runId; _selectedLogPeripheral = null; _commandLogEntries = null;
+        _drilldown = new(await EvidenceRepo.GetForRunAsync(runId), await VerdictRepo.GetForRunAsync(runId));
+    }
+
+    private async Task ToggleCommandLog(string runId, PeripheralId peripheralId)
+    {
+        if (_selectedLogPeripheral == peripheralId) { _selectedLogPeripheral = null; _commandLogEntries = null; return; }
+        _selectedLogPeripheral = peripheralId;
+        _commandLogEntries = await CommandLogRepo.GetForRunPeripheralAsync(runId, peripheralId);
     }
 
     private async Task CreateExportAsync()
     {
-        _exportBusy = true;
-        _exportError = null;
-        _exportJob = null;
+        _exportBusy = true; _exportError = null; _exportJob = null;
         try
         {
             var from = new DateTimeOffset(_exportFrom, TimeSpan.Zero);
             var to = new DateTimeOffset(_exportTo, TimeSpan.Zero).AddDays(1);
-
-            var job = await ExportSvc.CreateAsync(
-                new ExportService.CreateExportRequest(from, to, "dashboard"));
-
-            if (job.Status == ExportStatus.Ready)
-                _exportJob = job;
-            else
-                _exportError = "Export failed on server. Check logs.";
+            var job = await ExportSvc.CreateAsync(new ExportService.CreateExportRequest(from, to, "dashboard"));
+            if (job.Status == ExportStatus.Ready) _exportJob = job; else _exportError = "Export failed on server. Check logs.";
         }
-        catch (ArgumentException ex)
-        {
-            _exportError = ex.Message;
-        }
-        finally
-        {
-            _exportBusy = false;
-        }
+        catch (ArgumentException ex) { _exportError = ex.Message; }
+        finally { _exportBusy = false; }
     }
 
-    private sealed record DrilldownData(
-        IReadOnlyList<PeripheralEvidence> Evidence,
-        IReadOnlyList<PeripheralVerdict> Verdicts);
+    private sealed record DrilldownData(IReadOnlyList<PeripheralEvidence> Evidence, IReadOnlyList<PeripheralVerdict> Verdicts);
 }

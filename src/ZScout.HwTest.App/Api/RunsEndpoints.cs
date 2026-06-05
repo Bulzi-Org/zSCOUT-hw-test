@@ -39,6 +39,10 @@ public static class RunsEndpoints
 			if (!canStart)
 				return Results.Conflict(new { Message = "A run is already active.", ActiveRunId = active!.RunId });
 
+			var selectedTests = req.Tests is { Length: > 0 }
+				? req.Tests.OrderBy(p => p).ToList()
+				: Enum.GetValues<PeripheralId>().ToList();
+
 			var run = new TestRun
 			{
 				RunId = Guid.NewGuid().ToString("N"),
@@ -46,6 +50,7 @@ public static class RunsEndpoints
 				Status = RunStatus.Queued,
 				RequestedByUserId = "dashboard",
 				Configuration = req.Configuration ?? new RunConfiguration(),
+				SelectedTests = selectedTests,
 				StartedAtUtc = DateTimeOffset.UtcNow
 			};
 			await runs.SaveAsync(run, ct);
@@ -119,6 +124,6 @@ public static class RunsEndpoints
 		return app;
 	}
 
-	public sealed record StartRunRequest(RunMode Mode, RunConfiguration? Configuration);
+	public sealed record StartRunRequest(RunMode Mode, RunConfiguration? Configuration, PeripheralId[]? Tests);
 	public sealed record VerdictRequest(VerdictOutcome Outcome, string? FailureReason);
 }
