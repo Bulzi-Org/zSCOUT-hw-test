@@ -20,6 +20,7 @@ public sealed class RunOrchestrator
 	private readonly LiveEventPublisher _events;
 	private readonly RunCancellationService _cancellation;
 	private readonly CommandLogRepository _commandLog;
+	private readonly TelemetryStreamWriter _telemetry;
 	private readonly ILogger<RunOrchestrator> _logger;
 
 	/// <summary>Per-test CTS keyed by "runId:peripheralId". Set by the UI stop buttons.</summary>
@@ -37,6 +38,7 @@ public sealed class RunOrchestrator
 		EvidenceRepository evidence,
 		CommandLogRepository commandLog,
 		LiveEventPublisher events,
+		TelemetryStreamWriter telemetry,
 		RunCancellationService cancellation,
 		ILogger<RunOrchestrator> logger)
 	{
@@ -45,6 +47,7 @@ public sealed class RunOrchestrator
 		_evidence = evidence;
 		_commandLog = commandLog;
 		_events = events;
+		_telemetry = telemetry;
 		_cancellation = cancellation;
 		_logger = logger;
 	}
@@ -208,6 +211,18 @@ public sealed class RunOrchestrator
 	/// diagnostic evidence rather than bubbling up to stop the orchestrator.
 	/// Passes a reportStep callback to publish live command progress events.
 	/// </summary>
+	/// <summary>
+	/// Maps each peripheral to its telemetry stream type.
+	/// </summary>
+	private static StreamType GetStreamType(PeripheralId pid) => pid switch
+	{
+		PeripheralId.Gps => StreamType.GpsNmea,
+		PeripheralId.Compass => StreamType.CompassHeading,
+		PeripheralId.Sdr => StreamType.SdrInfo,
+		PeripheralId.Halow => StreamType.HalowMetrics,
+		_ => StreamType.GpsNmea
+	};
+
 	private async Task<(PeripheralEvidence Evidence, PeripheralStatus Status)> ProbeAdapterSafeAsync(
 		IHardwareAdapter adapter, TestRun run, CancellationToken ct)
 	{
@@ -226,6 +241,22 @@ public sealed class RunOrchestrator
 				Output = output,
 				IsError = isError
 			}, CancellationToken.None);
+
+			// Capture telemetry sample alongside each command progress event
+			try
+			{
+				var sample = await adapter.ReadRawSampleAsync(ct);
+				if (sample is not null)
+				{
+					var streamType = GetStreamType(adapter.PeripheralId);
+					await _telemetry.WriteAsync(run.RunId, adapter.PeripheralId, streamType, sample, CancellationToken.None);
+					await _events.PublishTelemetrySampleAsync(run.RunId, adapter.PeripheralId, sample, CancellationToken.None);
+				}
+			}
+			catch (Exception ex) when (ex is not OperationCanceledException)
+			{
+				_logger.LogDebug(ex, "Telemetry sample capture failed for {Peripheral}", adapter.PeripheralId);
+			}
 		};
 
 		DiagnosticEnvelope envelope;

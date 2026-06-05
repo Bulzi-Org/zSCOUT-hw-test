@@ -18,6 +18,8 @@ public sealed class RunOrchestratorTests : IDisposable
 	private readonly CommandLogRepository _commandLog;
 	private readonly RunCancellationService _cancellation;
 	private readonly NullLiveEventPublisher _events;
+	private readonly TelemetryStreamRepository _streamRepo;
+	private readonly TelemetryStreamWriter _telemetry;
 
 	public RunOrchestratorTests()
 	{
@@ -31,6 +33,8 @@ public sealed class RunOrchestratorTests : IDisposable
 		_commandLog = new CommandLogRepository(_config);
 		_cancellation = new RunCancellationService();
 		_events = new NullLiveEventPublisher();
+		_streamRepo = new TelemetryStreamRepository(_config);
+		_telemetry = new TelemetryStreamWriter(_streamRepo, NullLogger<TelemetryStreamWriter>.Instance);
 	}
 
 	public void Dispose()
@@ -39,7 +43,7 @@ public sealed class RunOrchestratorTests : IDisposable
 	}
 
 	private RunOrchestrator CreateOrchestrator(IEnumerable<IHardwareAdapter> adapters) =>
-		new(adapters, _runs, _evidence, _commandLog, _events,
+		new(adapters, _runs, _evidence, _commandLog, _events, _telemetry,
 			_cancellation, NullLogger<RunOrchestrator>.Instance);
 
 	private async Task<TestRun> SeedRunAsync(IReadOnlyList<PeripheralId> selectedTests)
