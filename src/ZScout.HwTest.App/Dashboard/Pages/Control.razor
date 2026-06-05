@@ -219,7 +219,7 @@ else
             {
                 foreach (var pid in _runTests)
                 {
-                    if (_testStatuses[pid] == "Pending") { _testStatuses[pid] = "Running"; _currentTest = pid; break; }
+                    if (_testStatuses[pid] == "Pending") { _testStatuses[pid] = "Running"; ClearTestOutput(); _currentTest = pid; break; }
                 }
             }
         }
@@ -285,6 +285,7 @@ else
                 _testStatuses[pid] = "Fail";
                 _testErrors[pid] = err;
                 _verdictDetails[pid] = err;
+                ClearTestOutput();
                 _currentTest = null;
             }
         }
@@ -306,6 +307,7 @@ else
             {
                 _testStatuses[pid] = "Pass";
                 _verdictDetails[pid] = "\u2014";
+                ClearTestOutput();
                 _currentTest = null;
             }
         }
@@ -313,6 +315,16 @@ else
     }
 
     private string GetSummaryValue(string key) => _summaryValues.TryGetValue(key, out var v) ? v : "--";
+
+    /// <summary>
+    /// Clears log entries and summary values when transitioning between tests.
+    /// Must be called any time _currentTest changes.
+    /// </summary>
+    private void ClearTestOutput()
+    {
+        _logEntries.Clear();
+        _summaryValues.Clear();
+    }
 
     private void OnRunStatusChanged(object? sender, RunStatusEventArgs e)
     {
