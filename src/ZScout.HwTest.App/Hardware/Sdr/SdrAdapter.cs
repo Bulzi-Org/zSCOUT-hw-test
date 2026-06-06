@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using System.Text.Json;
 using ZScout.HwTest.App.Hardware.Common;
 using ZScout.HwTest.Contracts.Models;
@@ -9,15 +10,42 @@ namespace ZScout.HwTest.App.Hardware.Sdr;
 /// Connects to sdr-svc on configurable host:port (default localhost:5101) instead
 /// of calling SoapySDRUtil directly. Eliminates the need for USB device
 /// pass-through and SoapySDR tools in the container.
-/// T018: Device status, capabilities, and band sweep via HTTP REST.
+///
+/// T018: Device status, capabilities, RX configure and IQ acquire via HTTP REST.
+///
+/// RunMode.Host runs the full functional path: status → capabilities →
+/// configure RX → acquire IQ samples → validate block.
+/// RunMode.Container runs the lighter path: status → capabilities only
+/// (no real PCIe SDR hardware in a container).
+///
+/// TODO(sdr-svc#26, sdr-svc#27): ConfigureRxAsync and AcquireSamplesAsync
+/// call POST /api/rx/configure and GET /api/rx/samples respectively.
+/// These endpoints do not exist in sdr-svc yet; they will be added by #26/#27.
+///
+/// TODO(zSCOUT-common#10): Replace local SdrRxConfig / SdrIqSampleBlock with
+/// the canonical types from ZScout.Common.Sdr once that package lands.
 /// </summary>
 public sealed class SdrAdapter : IHardwareAdapter
 {
+	/// <summary>Safe test frequency inside the Wavelet-Lab uSDR range.</summary>
+	private const long DefaultTestCenterFreqHz = 800_000_000L; // 800 MHz
+
+	/// <summary>Safe sample rate supported by the uSDR.</summary>
+	private const long DefaultTestSampleRateHz = 1_000_000L; // 1 MSPS
+
+	/// <summary>Number of IQ samples to acquire in the functional test.</summary>
+	private const int FunctionalTestSampleCount = 4096;
+
 	public PeripheralId PeripheralId => PeripheralId.Sdr;
 
 	private readonly ILogger<SdrAdapter> _logger;
 	private readonly IConfiguration _config;
 	private readonly IHttpClientFactory _httpClientFactory;
+
+	private static readonly JsonSerializerOptions JsonOptions = new()
+	{
+		PropertyNameCaseInsensitive = true
+	};
 
 	public SdrAdapter(ILogger<SdrAdapter> logger, IConfiguration config, IHttpClientFactory httpClientFactory)
 	{
@@ -28,13 +56,17 @@ public sealed class SdrAdapter : IHardwareAdapter
 
 	/// <summary>
 	/// Probes the SDR via sdr-svc REST API (FR-006, FR-007).
-	/// Returns Ready with device info on success, Unavailable if service is not reachable.
+	///
+	/// Container mode: status + capabilities check only.
+	/// Host mode: status + capabilities + configure RX + acquire IQ samples + validate.
+	///
+	/// Returns Ready on full success, Unavailable if the service is not reachable,
+	/// Degraded if the service is reachable but a step fails.
 	/// </summary>
 	public async Task<DiagnosticEnvelope> ProbeAsync(RunMode mode, Func<string, string, bool, Task>? reportStep = null, CancellationToken ct = default)
 	{
 		var messages = new List<string>();
 
-		// Resolve sdr-svc endpoint from configuration (FR-006, FR-013)
 		var host = _config["Peripherals:Sdr:Host"] ?? "localhost";
 		var port = int.TryParse(_config["Peripherals:Sdr:Port"], out var p) ? p : 5101;
 		var timeoutMs = int.TryParse(_config["Peripherals:Sdr:TimeoutMs"], out var t) ? t : 5_000;
@@ -44,14 +76,18 @@ public sealed class SdrAdapter : IHardwareAdapter
 		client.BaseAddress = new Uri(baseUrl);
 		client.Timeout = TimeSpan.FromMilliseconds(timeoutMs);
 
+		var snapshot = new Dictionary<string, object?>();
+
 		try
 		{
-			// 1. Check device status via REST (FR-018)
+			// ── Step 1: device status ──────────────────────────────────────────
 			using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 			statusCts.CancelAfter(timeoutMs);
 			using var statusResponse = await client.GetAsync("/api/status", statusCts.Token);
 			statusResponse.EnsureSuccessStatusCode();
-			using var statusDoc = await JsonDocument.ParseAsync(await statusResponse.Content.ReadAsStreamAsync(statusCts.Token), cancellationToken: statusCts.Token);
+			using var statusDoc = await JsonDocument.ParseAsync(
+				await statusResponse.Content.ReadAsStreamAsync(statusCts.Token),
+				cancellationToken: statusCts.Token);
 			var statusRoot = statusDoc.RootElement;
 
 			var available = statusRoot.TryGetProperty("deviceFound", out var availEl) && availEl.GetBoolean();
@@ -65,36 +101,28 @@ public sealed class SdrAdapter : IHardwareAdapter
 			messages.Add($"sdr-svc reachable on {host}:{port}");
 			_logger.LogInformation("SDR probe: sdr-svc reachable on {Host}:{Port}", host, port);
 
+			snapshot["service_available"] = true;
+			snapshot["device_found"] = available;
+			snapshot["driver_info"] = driverInfo;
+			snapshot["probe_ok"] = probeOk;
+
 			if (!available)
 			{
 				messages.Add($"sdr-svc reports device unavailable: {statusMessage}");
-				return new DiagnosticEnvelope
-				{
-					PeripheralId = PeripheralId,
-					DependencyAvailable = true,
-					Status = PeripheralStatus.Unavailable,
-					Messages = messages,
-					Snapshot = new HealthSnapshot
-					{
-						Values = new Dictionary<string, object?>
-						{
-							["service_available"] = true,
-							["device_found"] = false,
-							["status_message"] = statusMessage
-						}
-					},
-					CapturedAtUtc = DateTimeOffset.UtcNow
-				};
+				snapshot["status_message"] = statusMessage;
+				return BuildEnvelope(PeripheralStatus.Unavailable, messages, snapshot);
 			}
 
 			messages.Add($"SDR device found: {driverInfo}");
 
-			// 2. Get capabilities via REST (FR-007)
+			// ── Step 2: capabilities ───────────────────────────────────────────
 			using var capsCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 			capsCts.CancelAfter(timeoutMs);
 			using var capsResponse = await client.GetAsync("/api/capabilities", capsCts.Token);
 			capsResponse.EnsureSuccessStatusCode();
-			using var capsDoc = await JsonDocument.ParseAsync(await capsResponse.Content.ReadAsStreamAsync(capsCts.Token), cancellationToken: capsCts.Token);
+			using var capsDoc = await JsonDocument.ParseAsync(
+				await capsResponse.Content.ReadAsStreamAsync(capsCts.Token),
+				cancellationToken: capsCts.Token);
 			var capsRoot = capsDoc.RootElement;
 
 			var minFreqHz = 0.0;
@@ -104,73 +132,150 @@ public sealed class SdrAdapter : IHardwareAdapter
 				minFreqHz = rxFreqEl.TryGetProperty("min", out var minFEl) ? minFEl.GetDouble() : 0.0;
 				maxFreqHz = rxFreqEl.TryGetProperty("max", out var maxFEl) ? maxFEl.GetDouble() : 0.0;
 			}
-			var minGainDb = 0.0;
 			var maxGainDb = 0.0;
 			if (capsRoot.TryGetProperty("rxGains", out var gainsEl) && gainsEl.ValueKind == JsonValueKind.Object)
 			{
 				foreach (var gain in gainsEl.EnumerateObject())
-				{
-					if (gain.Value.TryGetProperty("max", out var maxGEl))
-					{
-						var gMax = maxGEl.GetDouble();
-						if (gMax > maxGainDb) maxGainDb = gMax;
-					}
-				}
+					if (gain.Value.TryGetProperty("max", out var maxGEl) && maxGEl.GetDouble() > maxGainDb)
+						maxGainDb = maxGEl.GetDouble();
 			}
 
 			if (reportStep is not null)
-				await reportStep("GET /api/capabilities", $"freq={minFreqHz / 1e6:F1}-{maxFreqHz / 1e6:F1}MHz gain={minGainDb:F0}-{maxGainDb:F0}dB", false);
+				await reportStep("GET /api/capabilities", $"freq={minFreqHz / 1e6:F1}-{maxFreqHz / 1e6:F1}MHz max_gain={maxGainDb:F0}dB", false);
 
-			messages.Add($"SDR PASS: {driverInfo} tuning {minFreqHz / 1e6:F1}-{maxFreqHz / 1e6:F1} MHz, gain {minGainDb:F0}-{maxGainDb:F0} dB");
+			snapshot["min_frequency_hz"] = minFreqHz;
+			snapshot["max_frequency_hz"] = maxFreqHz;
+			snapshot["max_gain_db"] = maxGainDb;
+			snapshot["rx_configured"] = false;
+			snapshot["iq_sample_count"] = 0;
 
-			return new DiagnosticEnvelope
+			// ── Step 3: RX configure + IQ acquire (Host mode only) ─────────────
+			// TODO(sdr-svc#26, sdr-svc#27): these endpoints are not in sdr-svc yet.
+			// The gate below ensures we skip gracefully in Container mode, and the
+			// try/catch inside handles HTTP 404 during the transition period.
+			if (mode == RunMode.Host)
 			{
-				PeripheralId = PeripheralId,
-				DependencyAvailable = true,
-				Status = PeripheralStatus.Ready,
-				Messages = messages,
-				Snapshot = new HealthSnapshot
+				var testFreqHz = long.TryParse(_config["Peripherals:Sdr:TestCenterFreqHz"], out var tf)
+					? tf : DefaultTestCenterFreqHz;
+				var testRateHz = long.TryParse(_config["Peripherals:Sdr:TestSampleRateHz"], out var tr)
+					? tr : DefaultTestSampleRateHz;
+
+				try
 				{
-					Values = new Dictionary<string, object?>
-					{
-						["service_available"] = true,
-						["device_found"] = true,
-						["driver_info"] = driverInfo,
-						["probe_ok"] = probeOk,
-						["min_frequency_hz"] = minFreqHz,
-						["max_frequency_hz"] = maxFreqHz,
-						["min_gain_db"] = minGainDb,
-						["max_gain_db"] = maxGainDb
-					}
-				},
-				CapturedAtUtc = DateTimeOffset.UtcNow
-			};
+					var rxConfig = new SdrRxConfig(testFreqHz, testRateHz);
+					var configuredFreqHz = await ConfigureRxAsync(rxConfig, client, timeoutMs, ct);
+
+					if (reportStep is not null)
+						await reportStep("POST /api/rx/configure",
+							$"center={configuredFreqHz / 1e6:F3}MHz rate={testRateHz / 1e6:F1}MSPS", false);
+
+					snapshot["rx_configured"] = true;
+					snapshot["last_center_freq_hz"] = configuredFreqHz;
+					snapshot["last_sample_rate_hz"] = testRateHz;
+					messages.Add($"RX configured: {configuredFreqHz / 1e6:F3} MHz @ {testRateHz / 1e6:F1} MSPS");
+
+					var block = await AcquireSamplesAsync(FunctionalTestSampleCount, client, timeoutMs, ct);
+					var (sampleCount, minVal, maxVal, meanAbs) = ValidateIqBlock(block);
+
+					if (reportStep is not null)
+						await reportStep("GET /api/rx/samples",
+							$"count={sampleCount} min={minVal:F4} max={maxVal:F4} mean_abs={meanAbs:F4}", false);
+
+					snapshot["iq_sample_count"] = sampleCount;
+					snapshot["iq_min_value"] = minVal;
+					snapshot["iq_max_value"] = maxVal;
+					snapshot["iq_mean_abs"] = meanAbs;
+
+					var countOk = sampleCount == FunctionalTestSampleCount * 2; // I+Q interleaved
+					var rangeOk = minVal >= -1.5f && maxVal <= 1.5f; // CF32 normalized ±1 with margin
+					if (!countOk)
+						messages.Add($"IQ WARNING: expected {FunctionalTestSampleCount * 2} floats, got {sampleCount}");
+					if (!rangeOk)
+						messages.Add($"IQ WARNING: values out of CF32 normalized range [{minVal:F4}, {maxVal:F4}]");
+
+					messages.Add($"IQ acquire PASS: {sampleCount / 2} samples, mean_abs={meanAbs:F4}");
+				}
+				catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+				{
+					// sdr-svc#26/27 not yet deployed — gracefully degrade, not block the run
+					_logger.LogWarning("SDR probe: /api/rx/configure or /api/rx/samples returned 404 — sdr-svc#26/27 not yet deployed");
+					messages.Add("RX configure/acquire skipped: sdr-svc endpoints not yet available (pending sdr-svc#26/27)");
+					snapshot["rx_configure_unavailable"] = true;
+				}
+			}
+
+			messages.Add($"SDR PASS: {driverInfo} tuning {minFreqHz / 1e6:F1}-{maxFreqHz / 1e6:F1} MHz");
+
+			return BuildEnvelope(PeripheralStatus.Ready, messages, snapshot);
 		}
 		catch (Exception ex) when (ex is not OperationCanceledException)
 		{
 			_logger.LogWarning(ex, "SDR probe: REST call to sdr-svc failed");
 			messages.Add($"REST error: {ex.GetType().Name}: {ex.Message}");
-			return new DiagnosticEnvelope
-			{
-				PeripheralId = PeripheralId,
-				DependencyAvailable = true,
-				Status = PeripheralStatus.Degraded,
-				Messages = messages,
-				Snapshot = new HealthSnapshot
-				{
-					Values = new Dictionary<string, object?>
-					{
-						["service_available"] = true,
-						["rest_error"] = ex.Message
-					}
-				},
-				CapturedAtUtc = DateTimeOffset.UtcNow
-			};
+			snapshot["service_available"] = snapshot.ContainsKey("service_available") ? snapshot["service_available"] : false;
+			snapshot["rest_error"] = ex.Message;
+			return BuildEnvelope(PeripheralStatus.Degraded, messages, snapshot);
 		}
 	}
 
 	/// <summary>
+	/// Sends POST /api/rx/configure to sdr-svc and returns the actual configured center frequency.
+	/// </summary>
+	/// <remarks>
+	/// TODO(sdr-svc#26): endpoint does not exist yet; will throw HttpRequestException(404)
+	/// until sdr-svc #26 is deployed.
+	/// TODO(zSCOUT-common#10): Replace <see cref="SdrRxConfig"/> with ZScout.Common.Sdr.RxConfig.
+	/// </remarks>
+	public async Task<long> ConfigureRxAsync(SdrRxConfig config, HttpClient client, int timeoutMs, CancellationToken ct)
+	{
+		using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+		cts.CancelAfter(timeoutMs);
+
+		using var response = await client.PostAsJsonAsync("/api/rx/configure", config, JsonOptions, cts.Token);
+		response.EnsureSuccessStatusCode();
+
+		using var doc = await JsonDocument.ParseAsync(
+			await response.Content.ReadAsStreamAsync(cts.Token),
+			cancellationToken: cts.Token);
+
+		var root = doc.RootElement;
+		return root.TryGetProperty("centerFreqHz", out var freqEl) ? freqEl.GetInt64() : config.CenterFreqHz;
+	}
+
+	/// <summary>
+	/// Calls GET /api/rx/samples?numSamples=<paramref name="numSamples"/> on sdr-svc and returns
+	/// the parsed IQ sample block.
+	/// </summary>
+	/// <remarks>
+	/// TODO(sdr-svc#27): endpoint does not exist yet.
+	/// TODO(zSCOUT-common#10): Replace <see cref="SdrIqSampleBlock"/> with ZScout.Common.Sdr.SdrIqSamples.
+	/// </remarks>
+	public async Task<SdrIqSampleBlock> AcquireSamplesAsync(int numSamples, HttpClient client, int timeoutMs, CancellationToken ct)
+	{
+		using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+		cts.CancelAfter(timeoutMs);
+
+		using var response = await client.GetAsync($"/api/rx/samples?numSamples={numSamples}", cts.Token);
+		response.EnsureSuccessStatusCode();
+
+		using var doc = await JsonDocument.ParseAsync(
+			await response.Content.ReadAsStreamAsync(cts.Token),
+			cancellationToken: cts.Token);
+
+		var root = doc.RootElement;
+
+		var centerFreqHz = root.TryGetProperty("centerFreqHz", out var cfEl) ? cfEl.GetInt64() : 0L;
+		var sampleRateHz = root.TryGetProperty("sampleRateHz", out var srEl) ? srEl.GetInt64() : 0L;
+		var data = root.TryGetProperty("data", out var dataEl) && dataEl.ValueKind == JsonValueKind.Array
+			? dataEl.EnumerateArray().Select(e => e.GetSingle()).ToArray()
+			: [];
+
+		return new SdrIqSampleBlock(centerFreqHz, sampleRateHz, data);
+	}
+
+	/// <summary>
 	/// Returns a summary of the device status from sdr-svc.
+	/// Also reports last configured frequency and rate if available from a prior probe.
 	/// </summary>
 	public async Task<string?> ReadRawSampleAsync(CancellationToken ct = default)
 	{
@@ -186,7 +291,9 @@ public sealed class SdrAdapter : IHardwareAdapter
 			cts.CancelAfter(3_000);
 			using var response = await client.GetAsync("/api/status", cts.Token);
 			response.EnsureSuccessStatusCode();
-			using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cts.Token), cancellationToken: cts.Token);
+			using var doc = await JsonDocument.ParseAsync(
+				await response.Content.ReadAsStreamAsync(cts.Token),
+				cancellationToken: cts.Token);
 			var root = doc.RootElement;
 			var drv = root.TryGetProperty("driverInfo", out var drvEl) ? drvEl.GetString() ?? "" : "";
 			var avail = root.TryGetProperty("deviceFound", out var availEl) && availEl.GetBoolean();
@@ -197,4 +304,36 @@ public sealed class SdrAdapter : IHardwareAdapter
 			return null;
 		}
 	}
+
+	/// <summary>
+	/// Computes basic statistics over an IQ sample block for validation.
+	/// Returns (floatCount, min, max, meanAbs).
+	/// </summary>
+	internal static (int Count, float Min, float Max, float MeanAbs) ValidateIqBlock(SdrIqSampleBlock block)
+	{
+		if (block.Data.Length == 0)
+			return (0, 0f, 0f, 0f);
+
+		var min = float.MaxValue;
+		var max = float.MinValue;
+		var sumAbs = 0.0;
+		foreach (var v in block.Data)
+		{
+			if (v < min) min = v;
+			if (v > max) max = v;
+			sumAbs += Math.Abs(v);
+		}
+		return (block.Data.Length, min, max, (float)(sumAbs / block.Data.Length));
+	}
+
+	private DiagnosticEnvelope BuildEnvelope(PeripheralStatus status, List<string> messages, Dictionary<string, object?> snapshot) =>
+		new()
+		{
+			PeripheralId = PeripheralId,
+			DependencyAvailable = true,
+			Status = status,
+			Messages = messages,
+			Snapshot = new HealthSnapshot { Values = snapshot },
+			CapturedAtUtc = DateTimeOffset.UtcNow
+		};
 }
