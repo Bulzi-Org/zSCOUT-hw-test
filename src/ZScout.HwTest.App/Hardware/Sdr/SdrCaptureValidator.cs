@@ -25,7 +25,8 @@ namespace ZScout.HwTest.App.Hardware.Sdr;
 public sealed class SdrCaptureValidator
 {
     private const int DefaultSamplesPerCapture = 65_536;
-    private const int DefaultRepeatsPerCandidate = 3;
+    private const int DefaultRepeatsPerCandidate = 1;
+    private const int DefaultCaptureTimeoutMs = 3_000;
     private const double SignalPeakSnrThresholdDb = 10.0;
 
     /// <summary>
@@ -105,17 +106,31 @@ public sealed class SdrCaptureValidator
     public async Task<CaptureResult> RunAutoDiscoverAndCaptureAsync(
         int maxCandidates = 0,
         int numSamples = DefaultSamplesPerCapture,
+        Func<string, Task>? progress = null,
         CancellationToken ct = default)
     {
+        static Task Noop(string _) => Task.CompletedTask;
+
         numSamples = Math.Max(2_048, numSamples);
         var messages = new List<string>();
         var host = _config["Peripherals:Sdr:Host"] ?? "localhost";
         var port = int.TryParse(_config["Peripherals:Sdr:Port"], out var p) ? p : 5101;
+        var emit = progress ?? Noop;
         var repeatsPerCandidate = int.TryParse(_config["Peripherals:Sdr:AutoDiscoverRepeatsPerCandidate"], out var repeats)
             ? Math.Clamp(repeats, 1, 8)
             : DefaultRepeatsPerCandidate;
+        var captureTimeoutMs = int.TryParse(_config["Peripherals:Sdr:AutoDiscoverCaptureTimeoutMs"], out var configuredTimeout)
+            ? Math.Clamp(configuredTimeout, 500, 20_000)
+            : DefaultCaptureTimeoutMs;
         var candidates = BuildCandidates(maxCandidates);
-        messages.Add($"SDR Waveform Capture Validator starting (sdr-svc {host}:{port}, candidates={candidates.Count}, samples={numSamples}, repeats={repeatsPerCandidate})");
+
+        async Task AddMessageAsync(string line)
+        {
+            messages.Add(line);
+            await emit(line);
+        }
+
+        await AddMessageAsync($"SDR Waveform Capture Validator starting (sdr-svc {host}:{port}, candidates={candidates.Count}, samples={numSamples}, repeats={repeatsPerCandidate}, capture_timeout_ms={captureTimeoutMs})");
 
         IqSamples? chosenIq = null;
         ScanCandidate? chosenCandidate = null;
@@ -124,14 +139,14 @@ public sealed class SdrCaptureValidator
         for (int i = 0; i < candidates.Count; i++)
         {
             var cand = candidates[i];
-            messages.Add($"[cand {i + 1}/{candidates.Count}] {cand.Tech} {cand.Band} center={cand.CenterHz / 1_000_000.0:F3}MHz bw={cand.BandwidthHz / 1_000_000.0:F1}MHz");
+            await AddMessageAsync($"[cand {i + 1}/{candidates.Count}] {cand.Tech} {cand.Band} center={cand.CenterHz / 1_000_000.0:F3}MHz bw={cand.BandwidthHz / 1_000_000.0:F1}MHz");
 
             for (int rep = 1; rep <= repeatsPerCandidate; rep++)
             {
-                var capture = await CaptureRawAsync(cand.CenterHz, cand.BandwidthHz, numSamples, 12000, ct);
+                var capture = await CaptureRawAsync(cand.CenterHz, cand.BandwidthHz, numSamples, captureTimeoutMs, ct);
                 if (capture.Samples is null || capture.Samples.Data.Length == 0)
                 {
-                    messages.Add($"  [rep {rep}/{repeatsPerCandidate}] no IQ ({capture.Diagnostic})");
+                    await AddMessageAsync($"  [rep {rep}/{repeatsPerCandidate}] no IQ ({capture.Diagnostic})");
                     continue;
                 }
 
@@ -139,8 +154,8 @@ public sealed class SdrCaptureValidator
                 var bursts = DetectBursts(iq.Data);
                 var metrics = ComputeAttemptMetrics(iq, bursts);
 
-                messages.Add($"  [rep {rep}/{repeatsPerCandidate}] {capture.Diagnostic}");
-                messages.Add($"     stats: floats={metrics.FloatCount} mean_abs={metrics.MeanAbs:F4} p95={metrics.P95Db:F1}dB peak={metrics.PeakDb:F1}dB noise={metrics.NoiseFloorDb:F1}dB peak_snr={metrics.PeakSnrDb:F1}dB bursts={metrics.BurstCount}");
+                await AddMessageAsync($"  [rep {rep}/{repeatsPerCandidate}] {capture.Diagnostic}");
+                await AddMessageAsync($"     stats: floats={metrics.FloatCount} mean_abs={metrics.MeanAbs:F4} p95={metrics.P95Db:F1}dB peak={metrics.PeakDb:F1}dB noise={metrics.NoiseFloorDb:F1}dB peak_snr={metrics.PeakSnrDb:F1}dB bursts={metrics.BurstCount}");
 
                 if (bestAttempt is null || metrics.PeakSnrDb > bestAttempt.PeakSnrDb)
                 {
@@ -152,7 +167,7 @@ public sealed class SdrCaptureValidator
                 {
                     chosenIq = iq;
                     chosenCandidate = cand;
-                    messages.Add($"SELECTED: {cand.Tech} {cand.Band} @ {cand.CenterHz / 1_000_000.0:F3}MHz/{cand.BandwidthHz / 1_000_000.0:F1}MHz (bursts={metrics.BurstCount}, peak_snr={metrics.PeakSnrDb:F1}dB)");
+                    await AddMessageAsync($"SELECTED: {cand.Tech} {cand.Band} @ {cand.CenterHz / 1_000_000.0:F3}MHz/{cand.BandwidthHz / 1_000_000.0:F1}MHz (bursts={metrics.BurstCount}, peak_snr={metrics.PeakSnrDb:F1}dB)");
                     break;
                 }
             }
@@ -167,9 +182,9 @@ public sealed class SdrCaptureValidator
         {
             if (bestAttempt is not null)
             {
-                messages.Add($"Best observed energy: peak_snr={bestAttempt.PeakSnrDb:F1}dB p95={bestAttempt.P95Db:F1}dB bursts={bestAttempt.BurstCount}");
+                await AddMessageAsync($"Best observed energy: peak_snr={bestAttempt.PeakSnrDb:F1}dB p95={bestAttempt.P95Db:F1}dB bursts={bestAttempt.BurstCount}");
             }
-            messages.Add("Auto-discover complete: no candidate showed detectable transmissions above threshold. Verify antenna, gain, front-end path, and increase timeout/sample count if needed.");
+            await AddMessageAsync("Auto-discover complete: no candidate showed detectable transmissions above threshold. Verify antenna, gain, front-end path, and increase timeout/sample count if needed.");
             return new CaptureResult(
                 null, null, null,
                 0, 0, null, null,
@@ -193,10 +208,10 @@ public sealed class SdrCaptureValidator
             .Select(b => new PerTxInfo(b.Rssi, b.Snr, gps, capTime, b.StartSample, b.LengthSamples))
             .ToList();
 
-        messages.Add($"Analysis: tx_count={burstsFinal.Count} rssi(n={rssiVals.Count} range={(rssiVals.Count>0 ? rssiVals.Min() : 0):F1}..{(rssiVals.Count>0 ? rssiVals.Max() : 0):F1}) snr(n={snrVals.Count} range={(snrVals.Count>0 ? snrVals.Min() : 0):F1}..{(snrVals.Count>0 ? snrVals.Max() : 0):F1})");
-        messages.Add($"HEX prefix (first ~{hex.Length/2} bytes of IQ): {hex}");
+        await AddMessageAsync($"Analysis: tx_count={burstsFinal.Count} rssi(n={rssiVals.Count} range={(rssiVals.Count>0 ? rssiVals.Min() : 0):F1}..{(rssiVals.Count>0 ? rssiVals.Max() : 0):F1}) snr(n={snrVals.Count} range={(snrVals.Count>0 ? snrVals.Min() : 0):F1}..{(snrVals.Count>0 ? snrVals.Max() : 0):F1})");
+        await AddMessageAsync($"HEX prefix (first ~{hex.Length/2} bytes of IQ): {hex}");
         if (gps is not null)
-            messages.Add($"GPS at capture: mode={gps.Mode} lat={(gps.Latitude?.ToString("F5") ?? "n/a")} lon={(gps.Longitude?.ToString("F5") ?? "n/a")} sats={gps.SatellitesUsed}");
+            await AddMessageAsync($"GPS at capture: mode={gps.Mode} lat={(gps.Latitude?.ToString("F5") ?? "n/a")} lon={(gps.Longitude?.ToString("F5") ?? "n/a")} sats={gps.SatellitesUsed}");
 
         return new CaptureResult(
             chosenCandidate.CenterHz, chosenCandidate.BandwidthHz, hex,
