@@ -7,6 +7,7 @@ using ZScout.HwTest.App.Hardware.Compass;
 using ZScout.HwTest.App.Hardware.Gps;
 using ZScout.HwTest.App.Hardware.Halow;
 using ZScout.HwTest.App.Hardware.Sdr;
+using ZScout.Common.Sdr;
 using ZScout.HwTest.App.Persistence;
 using ZScout.HwTest.App.Runs;
 using ZScout.HwTest.App.Streams;
@@ -43,11 +44,19 @@ builder.Services.AddSingleton<RunConfigurationService>();
 // ── HTTP Clients (Tier 2 service communication) ────────────────────────────────────
 builder.Services.AddHttpClient();
 
+// Register shared SdrClient from zSCOUT-common (Phase A migration for #74).
+// Uses Peripherals:Sdr:BaseUrl (falls back to http://localhost:5101); coexists with
+// legacy Peripherals:Sdr:Host/Port used elsewhere for GPS/compat.
+builder.Services.AddSdrClient(builder.Configuration);
+
 // ── Hardware Adapters ─────────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<IHardwareAdapter, GpsAdapter>();
 builder.Services.AddSingleton<IHardwareAdapter, SdrAdapter>();
 builder.Services.AddSingleton<IHardwareAdapter, HalowAdapter>();
 builder.Services.AddSingleton<IHardwareAdapter, CompassAdapter>();
+
+// On-demand SDR auto-discover + waveform capture validator (Phase B for #74).
+builder.Services.AddSingleton<SdrCaptureValidator>();
 
 // ── Run Orchestration ─────────────────────────────────────────────────────────
 builder.Services.AddSingleton<RunOrchestrator>();
