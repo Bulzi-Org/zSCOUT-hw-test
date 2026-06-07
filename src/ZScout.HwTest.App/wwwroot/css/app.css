@@ -237,3 +237,22 @@ body {
 .log-entry .log-sep { color:#484f58; margin:0 0.25rem; }
 .log-entry .log-out { color:#c9d1d9; }
 .log-entry.error .log-out { color:#f85149; }
+
+/* Manual SDR validator output box (resizable by user) */
+.manual-validator-log {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 0.78rem;
+	line-height: 1.35;
+	white-space: pre;
+	min-height: 12rem;
+	height: 45vh;
+	resize: both;
+	overflow: auto;
+}
+
+@media (max-width: 768px) {
+	.manual-validator-log {
+		height: 38vh;
+		min-height: 10rem;
+	}
+}
