@@ -31,6 +31,9 @@ jobs:
           ref: main
           path: zSCOUT-common
           fetch-depth: 1
+          # Use a token with read access to Bulzi-Org/zSCOUT-common.
+          # Falls back to github.token when the secret is unavailable.
+          token: ${{ secrets.BULZI_ORG_REPO_READ_TOKEN != '' && secrets.BULZI_ORG_REPO_READ_TOKEN || github.token }}
 
       - name: Set up QEMU (for arm64 cross-build)
         uses: docker/setup-qemu-action@v4
