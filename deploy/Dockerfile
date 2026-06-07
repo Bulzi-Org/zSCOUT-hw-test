@@ -14,6 +14,9 @@ COPY zSCOUT-hw-test.slnx .
 COPY Directory.Build.props .
 COPY Directory.Packages.props .
 COPY src/ ./src/
+# Include shared common library sources outside /src so fallback external
+# ProjectReference path resolves without inheriting hw-test CPM settings.
+COPY zSCOUT-common/src/ /zSCOUT-common/src/
 
 # Restore App project only — tests/ is not copied into the build image
 RUN dotnet restore src/ZScout.HwTest.App/ZScout.HwTest.App.csproj -a $TARGETARCH
