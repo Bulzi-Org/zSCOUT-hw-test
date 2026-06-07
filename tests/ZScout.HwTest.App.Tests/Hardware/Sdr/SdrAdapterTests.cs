@@ -222,6 +222,33 @@ public sealed class SdrAdapterTests
     }
 
     [Fact]
+    public async Task ProbeAsync_HostMode_WithReportStep_EmitsAutoDiscoverDetails()
+    {
+        var cfg = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Peripherals:Sdr:AutoDiscoverMaxCandidates"] = "2",
+                ["Peripherals:Sdr:AutoDiscoverNumSamples"] = "4096",
+                ["Peripherals:Sdr:AutoDiscoverRepeatsPerCandidate"] = "1",
+            })
+            .Build();
+
+        var adapter = CreateAdapter(config: cfg);
+        var calls = new List<string>();
+
+        Task Report(string cmd, string output, bool isError)
+        {
+            calls.Add(cmd);
+            return Task.CompletedTask;
+        }
+
+        await adapter.ProbeAsync(RunMode.Host, Report);
+
+        Assert.Contains(calls, c => c.Contains("AUTO detail (validator)"));
+        Assert.Contains(calls, c => c.Contains("AUTO /api/rx/capture (validator)"));
+    }
+
+    [Fact]
     public async Task ProbeAsync_HostMode_ConfigureReturns404_GraceFullyDegrades()
     {
         var handler = new RoutingFakeHandler(new Dictionary<string, (HttpMethod, string)>

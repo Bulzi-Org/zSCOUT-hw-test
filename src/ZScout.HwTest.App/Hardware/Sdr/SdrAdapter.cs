@@ -225,6 +225,7 @@ public sealed class SdrAdapter : IHardwareAdapter
 							snapshot["autodiscover_tx_count"] = captureResult.TransmissionCount;
 							snapshot["autodiscover_center_freq_hz"] = captureResult.CenterFreqHz;
 							snapshot["autodiscover_bandwidth_hz"] = captureResult.BandwidthHz;
+							snapshot["autodiscover_message_count"] = captureResult.Messages?.Count ?? 0;
 							snapshot["autodiscover_rssi_range"] = captureResult.RssiCount > 0
 								? $"{captureResult.RssiMin?.ToString("F1")}..{captureResult.RssiMax?.ToString("F1")}"
 								: "n/a";
@@ -234,6 +235,11 @@ public sealed class SdrAdapter : IHardwareAdapter
 
 							if (reportStep is not null)
 							{
+								foreach (var line in captureResult.Messages ?? [])
+								{
+									await reportStep("AUTO detail (validator)", line, false);
+								}
+
 								var freq = captureResult.CenterFreqHz.HasValue ? $"{captureResult.CenterFreqHz.Value / 1e6:F3}MHz" : "none";
 								var bw = captureResult.BandwidthHz.HasValue ? $"{captureResult.BandwidthHz.Value / 1e6:F1}MHz" : "none";
 								await reportStep("AUTO /api/rx/capture (validator)", $"selected={freq}/{bw} tx={captureResult.TransmissionCount}", captureResult.TransmissionCount <= 0);
