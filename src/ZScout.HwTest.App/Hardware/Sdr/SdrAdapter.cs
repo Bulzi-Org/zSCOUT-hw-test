@@ -143,9 +143,9 @@ public sealed class SdrAdapter : IHardwareAdapter
 					? tr : DefaultTestSampleRateHz;
 				var autoDiscoverEnabled = !string.Equals(_config["Peripherals:Sdr:EnableAutoDiscoverInProbe"], "false", StringComparison.OrdinalIgnoreCase);
 				var autoDiscoverCandidates = int.TryParse(_config["Peripherals:Sdr:AutoDiscoverMaxCandidates"], out var maxCandidates)
-					? maxCandidates : 5;
+								? maxCandidates : 0;
 				var autoDiscoverSamples = int.TryParse(_config["Peripherals:Sdr:AutoDiscoverNumSamples"], out var discoverSamples)
-					? discoverSamples : 2048;
+								? discoverSamples : 65_536;
 
 				try
 				{
