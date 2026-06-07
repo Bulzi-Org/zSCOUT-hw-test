@@ -24,6 +24,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Checkout zSCOUT-common
+        uses: actions/checkout@v6
+        with:
+          repository: Bulzi-Org/zSCOUT-common
+          ref: main
+          path: zSCOUT-common
+          fetch-depth: 1
+
       - name: Set up QEMU (for arm64 cross-build)
         uses: docker/setup-qemu-action@v4
         with:
