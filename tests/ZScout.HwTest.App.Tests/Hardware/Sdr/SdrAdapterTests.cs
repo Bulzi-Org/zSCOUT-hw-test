@@ -75,7 +75,7 @@ public sealed class SdrAdapterTests
         return $$"""{"centerFreqHz":800000000,"sampleRateHz":1000000,"data":{{dataJson}},"timestamp":"2024-01-01T00:00:00Z"}""";
     }
 
-    // ── ProbeAsync — Container mode (status + caps only) ──────────────────────
+    // ── ProbeAsync — Container mode (full flow) ───────────────────────────────
 
     [Fact]
     public async Task ProbeAsync_ContainerMode_ServiceReachableDeviceFound_ReturnsReady()
@@ -152,7 +152,7 @@ public sealed class SdrAdapterTests
     }
 
     [Fact]
-    public async Task ProbeAsync_ContainerMode_DoesNotCallConfigureOrSamples()
+    public async Task ProbeAsync_ContainerMode_CallsConfigureAndSamples()
     {
         var adapter = CreateAdapter();
         var calls = new List<string>();
@@ -165,8 +165,8 @@ public sealed class SdrAdapterTests
 
         await adapter.ProbeAsync(RunMode.Container, Report);
 
-        Assert.DoesNotContain(calls, c => c.Contains("/api/rx/configure"));
-        Assert.DoesNotContain(calls, c => c.Contains("/api/rx/samples"));
+        Assert.Contains(calls, c => c.Contains("/api/rx/configure"));
+        Assert.Contains(calls, c => c.Contains("/api/rx/samples"));
     }
 
     // ── ProbeAsync — Host mode (full: status + caps + configure + acquire) ─────

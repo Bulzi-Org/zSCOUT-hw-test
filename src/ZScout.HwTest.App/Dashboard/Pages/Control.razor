@@ -27,11 +27,7 @@
             <div class="d-flex align-items-start gap-4 flex-wrap">
                 <div>
                     <label class="form-label mb-1">Mode</label>
-                    <select class="form-select form-select-sm" style="width:160px"
-                            @bind="_selectedMode">
-                        <option value="@RunMode.Container">Container</option>
-                        <option value="@RunMode.Host">Host</option>
-                    </select>
+                    <div class="form-control form-control-sm" style="width:160px">Container</div>
                 </div>
                 <div>
                     <label class="form-label mb-1">Tests</label>
@@ -145,6 +141,19 @@ else
                         <span class="summary-label">Poll Count</span><span>@GetSummaryValue("compass_polls")</span>
                     </div>
                 }
+                else if (_currentTest == PeripheralId.Sdr)
+                {
+                    <div class="summary-grid">
+                        <span class="summary-label">Health</span><span>@GetSummaryValue("sdr_health")</span>
+                        <span class="summary-label">Device</span><span>@GetSummaryValue("sdr_device")</span>
+                        <span class="summary-label">Probe OK</span><span>@GetSummaryValue("sdr_probe_ok")</span>
+                        <span class="summary-label">Freq Range</span><span>@GetSummaryValue("sdr_freq_range")</span>
+                        <span class="summary-label">RX Config</span><span>@GetSummaryValue("sdr_rx_config")</span>
+                        <span class="summary-label">IQ Stats</span><span>@GetSummaryValue("sdr_iq_stats")</span>
+                        <span class="summary-label">Capture Stats</span><span>@GetSummaryValue("sdr_capture_stats")</span>
+                        <span class="summary-label">Auto-Discover</span><span>@GetSummaryValue("sdr_autodiscover")</span>
+                    </div>
+                }
                 else
                 {
                     <div class="summary-grid">
@@ -176,7 +185,6 @@ else
     private PeripheralId[] _runTests = _allPeripherals;
 
     private TestRun? _activeRun;
-    private RunMode _selectedMode = RunMode.Container;
     private HashSet<PeripheralId> _selectedTests = new(_allPeripherals);
     private bool _busy;
     private string? _errorMsg;
@@ -243,7 +251,7 @@ else
 
         try
         {
-            var (run, err) = await RunSvc.StartRunAsync(_selectedMode, "dashboard", _selectedTests);
+            var (run, err) = await RunSvc.StartRunAsync(RunMode.Container, "dashboard", _selectedTests);
             if (err is not null) _errorMsg = err;
             else
             {
@@ -451,6 +459,37 @@ else
                 // Increment poll count
                 var cnt = _summaryValues.TryGetValue("compass_polls", out var pc) && int.TryParse(pc, out var c) ? c + 1 : 1;
                 _summaryValues["compass_polls"] = cnt.ToString();
+            }
+        }
+        else if (e.PeripheralId == PeripheralId.Sdr)
+        {
+            _summaryValues["sdr_health"] = e.IsError ? "Error" : "Reachable";
+            var o = e.Output;
+
+            if (e.Command.Contains("/api/status", StringComparison.OrdinalIgnoreCase))
+            {
+                _summaryValues["sdr_device"] = ExtractBetween(o, "driver_info=", " probe_ok=");
+                _summaryValues["sdr_probe_ok"] = ExtractBetween(o, "probe_ok=", "");
+            }
+            else if (e.Command.Contains("/api/capabilities", StringComparison.OrdinalIgnoreCase))
+            {
+                _summaryValues["sdr_freq_range"] = ExtractBetween(o, "freq=", " max_gain=");
+            }
+            else if (e.Command.Contains("/api/rx/configure", StringComparison.OrdinalIgnoreCase))
+            {
+                _summaryValues["sdr_rx_config"] = o;
+            }
+            else if (e.Command.Contains("/api/rx/samples", StringComparison.OrdinalIgnoreCase))
+            {
+                _summaryValues["sdr_iq_stats"] = o;
+            }
+            else if (e.Command.Contains("/api/rx/capture (probe)", StringComparison.OrdinalIgnoreCase))
+            {
+                _summaryValues["sdr_capture_stats"] = o;
+            }
+            else if (e.Command.Contains("AUTO /api/rx/capture", StringComparison.OrdinalIgnoreCase))
+            {
+                _summaryValues["sdr_autodiscover"] = o;
             }
         }
         else

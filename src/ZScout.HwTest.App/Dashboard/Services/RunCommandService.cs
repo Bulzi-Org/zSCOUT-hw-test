@@ -48,6 +48,9 @@ public sealed class RunCommandService
 		RunMode mode, string userId, IReadOnlySet<PeripheralId> selectedTests,
 		CancellationToken ct = default)
 	{
+		if (string.Equals(userId, "dashboard", StringComparison.OrdinalIgnoreCase))
+			mode = RunMode.Container;
+
 		var (canStart, active) = await _lockService.TryAcquireAsync(ct);
 		if (!canStart)
 			return (null, $"A run is already active (ID: {active!.RunId}).");
