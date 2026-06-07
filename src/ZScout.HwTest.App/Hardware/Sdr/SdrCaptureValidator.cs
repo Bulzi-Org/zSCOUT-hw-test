@@ -250,6 +250,19 @@ public sealed class SdrCaptureValidator
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("SdrCaptureValidator: capture returned {Status} for {F}/{Bw}", response.StatusCode, centerFreqHz, bandwidthHz);
+
+                // Some deployments intermittently fail /api/rx/capture with 503 while
+                // configure + samples can still succeed. Use fallback to keep
+                // autodiscover informative instead of hard-skipping all candidates.
+                if (response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable)
+                {
+                    var fallback = await TryConfigureAndSampleFallbackAsync(centerFreqHz, bandwidthHz, numSamples, timeoutMs, ct);
+                    if (fallback.Samples is not null)
+                    {
+                        return fallback;
+                    }
+                }
+
                 var body = await response.Content.ReadAsStringAsync(ct);
                 var compact = string.IsNullOrWhiteSpace(body)
                     ? "(empty body)"
@@ -275,6 +288,38 @@ public sealed class SdrCaptureValidator
         {
             _logger.LogWarning(ex, "SdrCaptureValidator: capture exception for {F}/{Bw}", centerFreqHz, bandwidthHz);
             return new CaptureAttempt(null, $"exception: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private async Task<CaptureAttempt> TryConfigureAndSampleFallbackAsync(long centerFreqHz, long sampleRateHz, int numSamples, int timeoutMs, CancellationToken ct)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(timeoutMs);
+
+            await _sdrClient.ConfigureRxAsync(new RxConfigRequest
+            {
+                CenterFreqHz = centerFreqHz,
+                SampleRateHz = sampleRateHz,
+            }, cts.Token);
+
+            var iq = await _sdrClient.GetIqSamplesAsync(numSamples, cts.Token);
+            if (iq?.Data is { Length: > 0 })
+            {
+                var floatCount = iq.Data.Length;
+                var durationMs = iq.SampleRateHz > 0
+                    ? (floatCount / 2.0) / iq.SampleRateHz * 1000.0
+                    : 0.0;
+                return new CaptureAttempt(iq, $"fallback configure+samples center={iq.CenterFreqHz / 1_000_000.0:F3}MHz sample_rate={iq.SampleRateHz / 1_000_000.0:F3}MSPS floats={floatCount} duration~{durationMs:F2}ms");
+            }
+
+            return new CaptureAttempt(null, "fallback configure+samples returned empty IQ");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "SdrCaptureValidator: fallback configure+samples failed for {F}/{Bw}", centerFreqHz, sampleRateHz);
+            return new CaptureAttempt(null, $"fallback failed: {ex.GetType().Name}: {ex.Message}");
         }
     }
 

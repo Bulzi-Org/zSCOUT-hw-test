@@ -166,6 +166,8 @@ public sealed class SdrAdapter : IHardwareAdapter
 							try
 							{
 								var iqClient = _httpClientFactory.CreateClient("SdrSvc");
+								iqClient.BaseAddress ??= new Uri($"http://{host}:{port}");
+								iqClient.Timeout = TimeSpan.FromMilliseconds(timeoutMs);
 								var iq = await AcquireSamplesAsync(FunctionalTestSampleCount, iqClient, timeoutMs, ct);
 
 								var (sampleCount, minVal, maxVal, meanAbs) = ValidateIqBlock(iq);
