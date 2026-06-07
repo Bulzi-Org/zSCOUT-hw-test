@@ -230,7 +230,18 @@ body {
 .summary-label { color:#6c757d; font-weight:600; }
 
 /* Scrolling output log */
-.test-scroll-log { flex:1; min-height:300px; max-height:500px; overflow-y:auto; background:#1e2227; padding:0.75rem; font-family:monospace; font-size:0.75rem; }
+.test-scroll-log {
+	flex: 1;
+	min-height: 300px;
+	height: 46vh;
+	max-height: none;
+	resize: vertical;
+	overflow-y: auto;
+	background: #1e2227;
+	padding: 0.75rem;
+	font-family: monospace;
+	font-size: 0.75rem;
+}
 .log-entry { margin-bottom:0.15rem; line-height:1.4; white-space:pre-wrap; word-break:break-all; }
 .log-entry .log-ts { color:#8b949e; }
 .log-entry .log-cmd { color:#58a6ff; margin-left:0.25rem; }
@@ -251,6 +262,12 @@ body {
 }
 
 @media (max-width: 768px) {
+	.test-scroll-log {
+		height: 36vh;
+		min-height: 220px;
+		resize: none;
+	}
+
 	.manual-validator-log {
 		height: 38vh;
 		min-height: 10rem;
