@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using ZScout.Common.Sdr;
 using ZScout.HwTest.App.Hardware.Common;
 using ZScout.HwTest.Contracts.Models;
@@ -15,10 +16,9 @@ namespace ZScout.HwTest.App.Hardware.Sdr;
 ///
 /// T018: Device status, capabilities, RX configure and IQ acquire via HTTP REST.
 ///
-/// RunMode.Host runs the full functional path: status → capabilities →
-/// configure RX → acquire IQ samples → validate block + capture (new /api/rx/capture).
-/// RunMode.Container runs the lighter path: status → capabilities only
-/// (no real PCIe SDR hardware in a container).
+/// RunMode.Container and RunMode.Host both run the full functional path:
+/// status → capabilities → configure RX → acquire IQ samples → capture
+/// validation + auto-discover validator summary.
 ///
 /// Expanded in #74 to exercise the full set of sdr-svc endpoints (incl. new capture)
 /// with graceful 404 handling during sdr-svc#32 rollout.
@@ -58,8 +58,7 @@ public sealed class SdrAdapter : IHardwareAdapter
 	/// <summary>
 	/// Probes the SDR via sdr-svc REST API (FR-006, FR-007).
 	///
-	/// Container mode: status + capabilities check only.
-	/// Host mode: status + capabilities + configure RX + acquire IQ samples + validate.
+	/// Container mode and Host mode both execute the full SDR endpoint flow.
 	///
 	/// Returns Ready on full success, Unavailable if the service is not reachable,
 	/// Degraded if the service is reachable but a step fails.
@@ -133,16 +132,20 @@ public sealed class SdrAdapter : IHardwareAdapter
 			snapshot["rx_configured"] = false;
 			snapshot["iq_sample_count"] = 0;
 
-			// ── Step 3: RX configure + IQ acquire + capture (Host mode only) ───
+			// ── Step 3: RX configure + IQ acquire + capture (+ validator summary) ───
 			// Uses SdrClient (shared types). Exercises full endpoints including new
 			// capture path (/api/rx/capture). 404s during sdr-svc#32 rollout are
 			// handled gracefully so normal probes still succeed + provide evidence.
-			if (mode == RunMode.Host)
 			{
 				var testFreqHz = long.TryParse(_config["Peripherals:Sdr:TestCenterFreqHz"], out var tf)
 					? tf : DefaultTestCenterFreqHz;
 				var testRateHz = long.TryParse(_config["Peripherals:Sdr:TestSampleRateHz"], out var tr)
 					? tr : DefaultTestSampleRateHz;
+				var autoDiscoverEnabled = !string.Equals(_config["Peripherals:Sdr:EnableAutoDiscoverInProbe"], "false", StringComparison.OrdinalIgnoreCase);
+				var autoDiscoverCandidates = int.TryParse(_config["Peripherals:Sdr:AutoDiscoverMaxCandidates"], out var maxCandidates)
+					? maxCandidates : 5;
+				var autoDiscoverSamples = int.TryParse(_config["Peripherals:Sdr:AutoDiscoverNumSamples"], out var discoverSamples)
+					? discoverSamples : 2048;
 
 				try
 				{
@@ -210,6 +213,42 @@ public sealed class SdrAdapter : IHardwareAdapter
 						_logger.LogWarning("SDR probe: /api/rx/capture 404 — sdr-svc#32 not yet deployed");
 						messages.Add("Capture skipped in probe: sdr-svc#32 endpoint not available yet (graceful)");
 						snapshot["capture_unavailable"] = true;
+					}
+
+					if (autoDiscoverEnabled)
+					{
+						try
+						{
+							var validator = new SdrCaptureValidator(NullLogger<SdrCaptureValidator>.Instance, _httpClientFactory, _config, _sdrClient);
+							var captureResult = await validator.RunAutoDiscoverAndCaptureAsync(autoDiscoverCandidates, autoDiscoverSamples, ct);
+
+							snapshot["autodiscover_tx_count"] = captureResult.TransmissionCount;
+							snapshot["autodiscover_center_freq_hz"] = captureResult.CenterFreqHz;
+							snapshot["autodiscover_bandwidth_hz"] = captureResult.BandwidthHz;
+							snapshot["autodiscover_rssi_range"] = captureResult.RssiCount > 0
+								? $"{captureResult.RssiMin?.ToString("F1")}..{captureResult.RssiMax?.ToString("F1")}"
+								: "n/a";
+							snapshot["autodiscover_snr_range"] = captureResult.SnrCount > 0
+								? $"{captureResult.SnrMin?.ToString("F1")}..{captureResult.SnrMax?.ToString("F1")}"
+								: "n/a";
+
+							if (reportStep is not null)
+							{
+								var freq = captureResult.CenterFreqHz.HasValue ? $"{captureResult.CenterFreqHz.Value / 1e6:F3}MHz" : "none";
+								var bw = captureResult.BandwidthHz.HasValue ? $"{captureResult.BandwidthHz.Value / 1e6:F1}MHz" : "none";
+								await reportStep("AUTO /api/rx/capture (validator)", $"selected={freq}/{bw} tx={captureResult.TransmissionCount}", captureResult.TransmissionCount <= 0);
+							}
+
+							messages.Add(captureResult.TransmissionCount > 0
+								? $"Auto-discover PASS: tx={captureResult.TransmissionCount} selected={captureResult.CenterFreqHz}/{captureResult.BandwidthHz}"
+								: "Auto-discover completed: no transmissions detected");
+						}
+						catch (Exception ex) when (ex is not OperationCanceledException)
+						{
+							_logger.LogWarning(ex, "SDR probe auto-discover validator failed");
+							snapshot["autodiscover_error"] = ex.Message;
+							messages.Add($"Auto-discover error: {ex.Message}");
+						}
 					}
 				}
 				catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
