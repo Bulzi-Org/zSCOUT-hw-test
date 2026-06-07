@@ -16,4 +16,14 @@
     <ProjectReference Include="..\..\src\ZScout.HwTest.Contracts\ZScout.HwTest.Contracts.csproj" />
   </ItemGroup>
 
+  <!-- Conditional reference to zSCOUT-common (Phase A per approved plan for #74 / #19).
+       Same two-path pattern as zSCOUT-scanner for layout flexibility in worktrees/submodules.
+       Enables shared Sdr* types + SdrClient (removes local SdrModels.cs duplication). -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\zSCOUT-common\src\ZScout.Common\ZScout.Common.csproj"
+                      Condition="Exists('..\..\..\zSCOUT-common\src\ZScout.Common\ZScout.Common.csproj')" />
+    <ProjectReference Include="..\..\..\..\zSCOUT-common\src\ZScout.Common\ZScout.Common.csproj"
+                      Condition="!Exists('..\..\..\zSCOUT-common\src\ZScout.Common\ZScout.Common.csproj') and Exists('..\..\..\..\zSCOUT-common\src\ZScout.Common\ZScout.Common.csproj')" />
+  </ItemGroup>
+
 </Project>

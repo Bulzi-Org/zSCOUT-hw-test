@@ -171,6 +171,14 @@ The app runs `SoapySDRUtil --find` and checks that stdout contains the word
 probe exits 0; `Degraded` when found but probe fails; `Unavailable` when no
 SoapySDR device is enumerated.
 
+In Host/Run mode the app (SdrAdapter.ProbeAsync + SdrCaptureValidator) now also
+exercises the full sdr-svc REST surface including the new raw capture path
+(`/api/rx/capture?center_freq_hz=...&bandwidth_hz=...`) with graceful 404s.
+See the "/manual-tests" dashboard page for the "SDR Auto-Discover + Raw Waveform
+Capture Validator" panel (on-demand button that auto-selects an active uplink
+candidate, returns HEX prefix of the captured float IQ, tx count + RSSI/SNR
+range stats computed client-side, and GPS+time per burst).
+
 ---
 
 ## 3 — HaLow (Morse Micro MM8108 via morse_driver kernel module)

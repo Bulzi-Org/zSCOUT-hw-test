@@ -1,7 +1,9 @@
 @page "/manual-tests"
 @rendermode InteractiveServer
 @using Microsoft.JSInterop
+@using ZScout.HwTest.App.Hardware.Sdr
 @inject IJSRuntime JS
+@inject SdrCaptureValidator CaptureValidator
 
 <PageTitle>Manual Tests – zSCOUT</PageTitle>
 
@@ -140,10 +142,106 @@
 
 </div>
 
+<!-- SDR Waveform Capture Validator panel (new for #74) -->
+<div class="card mt-4">
+    <div class="card-header">
+        📻 SDR Auto-Discover + Raw Waveform Capture Validator
+        <span class="badge bg-info ms-2">Phase B</span>
+    </div>
+    <div class="card-body">
+        <p class="small text-muted mb-2">
+            On-demand test: auto-discovers an active cell uplink (tries curated LTE/5G FR1 f/bw candidates) using the sdr-svc raw capture endpoint.
+            Reports chosen freq/bandwidth, HEX sample of raw float IQ prefix, transmission count + RSSI/SNR aggregate stats (client-side 10*log10 mean power, noise floor est),
+            plus GPS fix + wall time per detected burst. Proves arbitrary supported f/bw capture + analysis.
+            Uses graceful 404 handling if capture endpoint not yet rolled out.
+        </p>
+        <button class="btn btn-primary btn-sm" @onclick="RunValidatorAsync" disabled="@isRunning">
+            @if (isRunning) { <span class="spinner-border spinner-border-sm me-1"></span> } Run Auto-Discover + Capture
+        </button>
+        <button class="btn btn-outline-secondary btn-sm ms-2" @onclick="ClearResults" disabled="@isRunning">Clear</button>
+
+        @if (captureResult is not null)
+        {
+            <div class="mt-3 border rounded p-2 small" style="background:#f8f9fa">
+                <div><strong>Chosen:</strong> @(captureResult.CenterFreqHz.HasValue ? $"{captureResult.CenterFreqHz.Value / 1_000_000.0:F3} MHz" : "—") / @(captureResult.BandwidthHz.HasValue ? $"{captureResult.BandwidthHz.Value / 1_000_000.0:F1} MHz BW" : "—")</div>
+                @if (!string.IsNullOrEmpty(captureResult.HexSample))
+                {
+                    <div class="mt-1"><strong>HEX (raw IQ prefix):</strong> <code style="word-break:break-all">@captureResult.HexSample</code></div>
+                }
+                <div class="mt-1">
+                    <strong>Stats:</strong>
+                    tx=@captureResult.TransmissionCount
+                    RSSI(n=@captureResult.RssiCount range=@(captureResult.RssiMin?.ToString("F1") ?? "—")..@(captureResult.RssiMax?.ToString("F1") ?? "—"))
+                    SNR(n=@captureResult.SnrCount range=@(captureResult.SnrMin?.ToString("F1") ?? "—")..@(captureResult.SnrMax?.ToString("F1") ?? "—"))
+                </div>
+                <div class="mt-1"><strong>Captured:</strong> @captureResult.CaptureTimeUtc.ToString("O") @(captureResult.GpsAtCapture is not null ? $" | GPS mode={captureResult.GpsAtCapture.Mode} sats={captureResult.GpsAtCapture.SatellitesUsed}" : "")</div>
+
+                @if (captureResult.PerTransmission?.Count > 0)
+                {
+                    <details class="mt-1"><summary>Per-transmission details (first 5)</summary>
+                        <ul class="mb-0 ps-3" style="font-size:0.8em">
+                            @foreach (var tx in captureResult.PerTransmission.Take(5))
+                            {
+                                <li> RSSI=@tx.Rssi.ToString("F1") SNR=@tx.Snr.ToString("F1") @tx.Time.ToString("HH:mm:ss") GPS=@(tx.Gps?.HasQualifyingFix == true ? "fix" : "no")</li>
+                            }
+                        </ul>
+                    </details>
+                }
+
+                @if (captureResult.Messages?.Count > 0)
+                {
+                    <div class="mt-1 text-muted" style="font-size:0.75em; max-height:6em; overflow:auto">
+                        @foreach (var m in captureResult.Messages) { <div>@m</div> }
+                    </div>
+                }
+            </div>
+        }
+        else if (!string.IsNullOrEmpty(validatorStatus))
+        {
+            <div class="mt-2 text-muted small">@validatorStatus</div>
+        }
+    </div>
+</div>
+
 @code {
     private async Task CopyToClipboardAsync(string text)
     {
         await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+    }
+
+    // ── SDR Capture Validator UI state & handler (added for #74) ─────────────────
+    private CaptureResult? captureResult;
+    private bool isRunning;
+    private string? validatorStatus;
+
+    private async Task RunValidatorAsync()
+    {
+        isRunning = true;
+        validatorStatus = "Running auto-discover + capture...";
+        captureResult = null;
+        StateHasChanged();
+
+        try
+        {
+            captureResult = await CaptureValidator.RunAutoDiscoverAndCaptureAsync(maxCandidates: 5, numSamples: 2048);
+            validatorStatus = null;
+        }
+        catch (Exception ex)
+        {
+            validatorStatus = $"Validator error: {ex.Message}";
+        }
+        finally
+        {
+            isRunning = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ClearResults()
+    {
+        captureResult = null;
+        validatorStatus = null;
+        StateHasChanged();
     }
 
     // GPS commands — Tier 2: gpsd runs inside zscout-gps-svc container, REST API on :5200
