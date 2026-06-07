@@ -27,11 +27,7 @@
             <div class="d-flex align-items-start gap-4 flex-wrap">
                 <div>
                     <label class="form-label mb-1">Mode</label>
-                    <select class="form-select form-select-sm" style="width:160px"
-                            @bind="_selectedMode">
-                        <option value="@RunMode.Container">Container</option>
-                        <option value="@RunMode.Host">Host</option>
-                    </select>
+                    <div class="form-control form-control-sm" style="width:160px">Container</div>
                 </div>
                 <div>
                     <label class="form-label mb-1">Tests</label>
@@ -176,7 +172,6 @@ else
     private PeripheralId[] _runTests = _allPeripherals;
 
     private TestRun? _activeRun;
-    private RunMode _selectedMode = RunMode.Container;
     private HashSet<PeripheralId> _selectedTests = new(_allPeripherals);
     private bool _busy;
     private string? _errorMsg;
@@ -243,7 +238,7 @@ else
 
         try
         {
-            var (run, err) = await RunSvc.StartRunAsync(_selectedMode, "dashboard", _selectedTests);
+            var (run, err) = await RunSvc.StartRunAsync(RunMode.Container, "dashboard", _selectedTests);
             if (err is not null) _errorMsg = err;
             else
             {
