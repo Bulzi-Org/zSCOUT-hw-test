@@ -143,9 +143,9 @@ public sealed class SdrAdapter : IHardwareAdapter
 					? tr : DefaultTestSampleRateHz;
 				var autoDiscoverEnabled = !string.Equals(_config["Peripherals:Sdr:EnableAutoDiscoverInProbe"], "false", StringComparison.OrdinalIgnoreCase);
 				var autoDiscoverCandidates = int.TryParse(_config["Peripherals:Sdr:AutoDiscoverMaxCandidates"], out var maxCandidates)
-								? maxCandidates : 0;
+								? maxCandidates : 48;
 				var autoDiscoverSamples = int.TryParse(_config["Peripherals:Sdr:AutoDiscoverNumSamples"], out var discoverSamples)
-								? discoverSamples : 65_536;
+								? discoverSamples : 16_384;
 
 				try
 				{
@@ -162,29 +162,46 @@ public sealed class SdrAdapter : IHardwareAdapter
 					snapshot["last_sample_rate_hz"] = testRateHz;
 					messages.Add($"RX configured: {configuredFreqHz / 1e6:F3} MHz @ {testRateHz / 1e6:F1} MSPS");
 
-					// Use factory client + helper (honors test fakes/overrides; in prod the helper falls to SdrClient when client null)
-					var iqClient = _httpClientFactory.CreateClient("SdrSvc");
-					var iq = await AcquireSamplesAsync(FunctionalTestSampleCount, iqClient, timeoutMs, ct);
+							// Use factory client + helper (honors test fakes/overrides; in prod the helper falls to SdrClient when client null)
+							try
+							{
+								var iqClient = _httpClientFactory.CreateClient("SdrSvc");
+								var iq = await AcquireSamplesAsync(FunctionalTestSampleCount, iqClient, timeoutMs, ct);
 
-					var (sampleCount, minVal, maxVal, meanAbs) = ValidateIqBlock(iq);
+								var (sampleCount, minVal, maxVal, meanAbs) = ValidateIqBlock(iq);
 
-					if (reportStep is not null)
-						await reportStep("GET /api/rx/samples (SdrClient)",
-							$"count={sampleCount} min={minVal:F4} max={maxVal:F4} mean_abs={meanAbs:F4}", false);
+								if (reportStep is not null)
+									await reportStep("GET /api/rx/samples (SdrClient)",
+										$"count={sampleCount} min={minVal:F4} max={maxVal:F4} mean_abs={meanAbs:F4}", false);
 
-					snapshot["iq_sample_count"] = sampleCount;
-					snapshot["iq_min_value"] = minVal;
-					snapshot["iq_max_value"] = maxVal;
-					snapshot["iq_mean_abs"] = meanAbs;
+								snapshot["iq_sample_count"] = sampleCount;
+								snapshot["iq_min_value"] = minVal;
+								snapshot["iq_max_value"] = maxVal;
+								snapshot["iq_mean_abs"] = meanAbs;
 
-					var countOk = sampleCount == FunctionalTestSampleCount * 2;
-					var rangeOk = minVal >= -1.5f && maxVal <= 1.5f;
-					if (!countOk)
-						messages.Add($"IQ WARNING: expected {FunctionalTestSampleCount * 2} floats, got {sampleCount}");
-					if (!rangeOk)
-						messages.Add($"IQ WARNING: values out of CF32 normalized range [{minVal:F4}, {maxVal:F4}]");
+								var countOk = sampleCount == FunctionalTestSampleCount * 2;
+								var rangeOk = minVal >= -1.5f && maxVal <= 1.5f;
+								if (!countOk)
+									messages.Add($"IQ WARNING: expected {FunctionalTestSampleCount * 2} floats, got {sampleCount}");
+								if (!rangeOk)
+									messages.Add($"IQ WARNING: values out of CF32 normalized range [{minVal:F4}, {maxVal:F4}]");
 
-					messages.Add($"IQ acquire PASS: {sampleCount / 2} samples, mean_abs={meanAbs:F4}");
+								messages.Add($"IQ acquire PASS: {sampleCount / 2} samples, mean_abs={meanAbs:F4}");
+							}
+							catch (OperationCanceledException)
+							{
+								snapshot["iq_acquire_error"] = "timed out";
+								messages.Add("IQ acquire timeout: proceeding with capture validator path");
+								if (reportStep is not null)
+									await reportStep("GET /api/rx/samples (SdrClient)", "timed out while waiting for samples", true);
+							}
+							catch (Exception ex)
+							{
+								snapshot["iq_acquire_error"] = ex.Message;
+								messages.Add($"IQ acquire error: {ex.GetType().Name}: {ex.Message} (continuing)");
+								if (reportStep is not null)
+									await reportStep("GET /api/rx/samples (SdrClient)", $"error: {ex.GetType().Name}: {ex.Message}", true);
+							}
 
 					// ── NEW: exercise capture path (proves arbitrary f/bw raw capture)
 					// Uses direct call (SdrClient does not yet expose Capture per common#14 eval).
@@ -219,8 +236,18 @@ public sealed class SdrAdapter : IHardwareAdapter
 					{
 						try
 						{
-							var validator = new SdrCaptureValidator(NullLogger<SdrCaptureValidator>.Instance, _httpClientFactory, _config, _sdrClient);
-							var captureResult = await validator.RunAutoDiscoverAndCaptureAsync(autoDiscoverCandidates, autoDiscoverSamples, ct);
+								var validator = new SdrCaptureValidator(NullLogger<SdrCaptureValidator>.Instance, _httpClientFactory, _config, _sdrClient);
+								var captureResult = await validator.RunAutoDiscoverAndCaptureAsync(
+									autoDiscoverCandidates,
+									autoDiscoverSamples,
+									progress: async line =>
+									{
+										if (reportStep is not null)
+										{
+											await reportStep("AUTO detail (validator)", line, false);
+										}
+									},
+									ct: ct);
 
 							snapshot["autodiscover_tx_count"] = captureResult.TransmissionCount;
 							snapshot["autodiscover_center_freq_hz"] = captureResult.CenterFreqHz;
@@ -235,11 +262,6 @@ public sealed class SdrAdapter : IHardwareAdapter
 
 							if (reportStep is not null)
 							{
-								foreach (var line in captureResult.Messages ?? [])
-								{
-									await reportStep("AUTO detail (validator)", line, false);
-								}
-
 								var freq = captureResult.CenterFreqHz.HasValue ? $"{captureResult.CenterFreqHz.Value / 1e6:F3}MHz" : "none";
 								var bw = captureResult.BandwidthHz.HasValue ? $"{captureResult.BandwidthHz.Value / 1e6:F1}MHz" : "none";
 								await reportStep("AUTO /api/rx/capture (validator)", $"selected={freq}/{bw} tx={captureResult.TransmissionCount}", captureResult.TransmissionCount <= 0);

@@ -217,6 +217,13 @@
                 }
             </div>
         }
+        @if (isRunning && validatorLiveMessages.Count > 0)
+        {
+            <div class="mt-3 border rounded p-2 small" style="background:#f8f9fa">
+                <div class="fw-semibold mb-1">Live capture diagnostics</div>
+                <textarea class="form-control form-control-sm manual-validator-log" readonly>@string.Join(Environment.NewLine, validatorLiveMessages)</textarea>
+            </div>
+        }
         else if (!string.IsNullOrEmpty(validatorStatus))
         {
             <div class="mt-2 text-muted small">@validatorStatus</div>
@@ -238,21 +245,22 @@
     private int validatorRetryCount = 1;
     private int validatorMaxCandidates;
     private int validatorNumSamples = 65_536;
+    private readonly List<string> validatorLiveMessages = [];
 
     protected override void OnInitialized()
     {
         validatorTimeoutSeconds = int.TryParse(Config["Peripherals:Sdr:ValidatorTimeoutSeconds"], out var timeoutSeconds)
             ? Math.Clamp(timeoutSeconds, 5, 3600)
-            : 30;
+            : 180;
         validatorRetryCount = int.TryParse(Config["Peripherals:Sdr:ValidatorRetryCount"], out var retryCount)
             ? Math.Clamp(retryCount, 0, 5)
-            : 1;
+            : 0;
         validatorMaxCandidates = int.TryParse(Config["Peripherals:Sdr:AutoDiscoverMaxCandidates"], out var maxCandidates)
             ? Math.Clamp(maxCandidates, 0, 5000)
-            : 0;
+            : 120;
         validatorNumSamples = int.TryParse(Config["Peripherals:Sdr:AutoDiscoverNumSamples"], out var samples)
             ? Math.Clamp(samples, 2048, 524288)
-            : 65_536;
+            : 32_768;
     }
 
     private async Task RunValidatorAsync()
@@ -260,6 +268,7 @@
         isRunning = true;
         validatorStatus = "Running auto-discover + capture...";
         captureResult = null;
+        validatorLiveMessages.Clear();
         StateHasChanged();
 
         try
@@ -278,6 +287,16 @@
                     captureResult = await CaptureValidator.RunAutoDiscoverAndCaptureAsync(
                         maxCandidates: validatorMaxCandidates,
                         numSamples: validatorNumSamples,
+                        progress: async line =>
+                        {
+                            validatorLiveMessages.Add(line);
+                            if (validatorLiveMessages.Count > 1000)
+                            {
+                                validatorLiveMessages.RemoveAt(0);
+                            }
+
+                            await InvokeAsync(StateHasChanged);
+                        },
                         ct: cts.Token);
                     validatorStatus = null;
                     break;
@@ -314,6 +333,7 @@
     {
         captureResult = null;
         validatorStatus = null;
+        validatorLiveMessages.Clear();
         StateHasChanged();
     }
 
