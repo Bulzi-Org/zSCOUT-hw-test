@@ -5,7 +5,7 @@
 
 ## Summary
 
-Refactor all four hardware adapters (GPS, Compass, SDR, HaLow) to consume Tier 2 service APIs instead of directly accessing hardware. GPS switches from pgrep-based gpsd detection to TCP connection to gps-svc:2947. Compass and SDR replace shell-command probes with gRPC clients to compass-svc:5100 and sdr-svc:5101. HaLow adopts a two-tier strategy: Tier A preserves direct hardware checks (Layers 0-3), Tier B adds gRPC mesh connectivity via zSCOUT-mesh:5102. RunOrchestrator switches from Task.WhenAll to incremental result processing. Docker container drops --privileged mode.
+Refactor all four hardware adapters (GPS, Compass, SDR, HaLow) to consume Tier 2 service APIs instead of directly accessing hardware. GPS switches from pgrep-based gpsd detection to TCP connection to gps-svc:2947. Compass and SDR replace shell-command probes with gRPC clients to compass-svc:5100 and sdr-svc:5101. HaLow adopts a two-tier strategy: Tier A preserves direct hardware checks (Layers 0-3), Tier B adds REST mesh connectivity via zSCOUT-mesh:5102 (`GET /api/status`). RunOrchestrator switches from Task.WhenAll to incremental result processing. Docker container drops --privileged mode.
 
 ## Technical Context
 
@@ -59,11 +59,10 @@ src/
       Sdr/
         SdrAdapter.cs                  # REWRITE: gRPC client to sdr-svc :5101
       Halow/
-        HalowAdapter.cs               # MODIFY: Add Tier B gRPC mesh after Tier A
+        HalowAdapter.cs               # MODIFY: Add Tier B REST mesh after Tier A
     Protos/
       compass.proto                    # NEW: CompassService gRPC definition
       sdr.proto                        # NEW: SdrService gRPC definition
-      mesh.proto                       # NEW: MeshService gRPC definition
     Runs/
       RunOrchestrator.cs               # MODIFY: Task.WhenAll → incremental processing
 tests/
@@ -90,13 +89,13 @@ Replace `pgrep -x gpsd` with a TCP socket connection attempt to `localhost:2947`
 Define minimal .proto files for compass-svc and sdr-svc. Use Grpc.Net.Client for typed service stubs. Proto files in `src/ZScout.HwTest.App/Protos/`, compiled with Grpc.Tools at build time.
 
 ### D3: HaLow — Two-tier with graceful Tier B fallback
-Tier A (Layers 0-3) preserved exactly as-is. Tier B appended: gRPC connect to mesh :5102 with 5s timeout. If unavailable, report NotTested. New snapshot fields: mesh_service_available, mesh_associated, peer_count, gateway_mode, bat0_ip, internet_reachable.
+Tier A (Layers 0-3) preserved exactly as-is. Tier B appended: REST call to mesh `GET /api/status` on :5102 with 5s timeout. If unavailable, report NotTested. New snapshot fields: mesh_service_available, mesh_associated, peer_count, gateway_mode, bat0_ip, internet_reachable.
 
 ### D4: RunOrchestrator — Incremental result processing
 Replace `Task.WhenAll` + post-loop with processing each adapter's result as it completes. Evidence is saved and status published immediately per adapter. Overall run completion after all adapters finish.
 
 ### D5: Docker — Drop --privileged, keep /sys:ro
-Remove `privileged: true` and `/dev:/dev:ro`. Keep `/sys:/sys:ro` for HaLow Tier A. Keep `--network host` for TCP/gRPC.
+Remove `privileged: true` and `/dev:/dev:ro`. Keep `/sys:/sys:ro` for HaLow Tier A. Keep `--network host` for TCP/gRPC/REST.
 
 ## Complexity Tracking
 
