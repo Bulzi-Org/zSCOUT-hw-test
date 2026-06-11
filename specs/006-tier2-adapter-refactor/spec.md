@@ -25,7 +25,7 @@ An operator runs the hw-test suite from a Docker container. The GPS adapter conn
 
 ### User Story 2 - HaLow two-tier hardware + mesh validation (Priority: P1)
 
-The HaLow adapter validates the MM8108 radio hardware (Tier A: Layers 0-3) using direct sysfs/iw commands (no privileged mode, just read-only /sys), then optionally validates mesh connectivity (Tier B: Layer 4+) via gRPC to the zSCOUT-mesh service if available. Tier A works independently of any mesh container.
+The HaLow adapter validates the MM8108 radio hardware (Tier A: Layers 0-3) using direct sysfs/iw commands (no privileged mode, just read-only /sys), then optionally validates mesh connectivity (Tier B: Layer 4+) via REST to the zSCOUT-mesh service if available. Tier A works independently of any mesh container.
 
 **Why this priority**: HaLow validation currently requires --privileged mode. The two-tier approach enables unprivileged hardware checks while also supporting mesh integration when available.
 
@@ -103,7 +103,7 @@ The hw-test container runs without --privileged mode. It requires only --network
 
 - What happens when a gRPC service is reachable but returns an error response? → Adapter returns Degraded with the error details.
 - What happens when TCP/gRPC connection succeeds but then drops mid-stream? → Adapter captures partial data, returns Degraded with collected samples.
-- What happens when HaLow Tier A passes but Tier B gRPC connection times out? → Report hardware Ready, mesh NotTested (not a failure).
+- What happens when HaLow Tier A passes but Tier B REST call times out? → Report hardware Ready, mesh NotTested (not a failure).
 - What happens when multiple adapters fail simultaneously? → Each failure is independently recorded; no cascade effects between adapters.
 
 ## Requirements *(mandatory)*
@@ -119,7 +119,7 @@ The hw-test container runs without --privileged mode. It requires only --network
 - **FR-007**: SDR adapter MUST retrieve device status, capabilities, and support band sweep operations via gRPC.
 - **FR-008**: HaLow adapter MUST implement a two-tier strategy: Tier A (hardware Layers 0-3, always runs) and Tier B (mesh Layer 4+, conditional on zSCOUT-mesh availability).
 - **FR-009**: HaLow Tier A MUST check USB enumeration, kernel module, firmware, wireless interface, and PHY capabilities using read-only /sys access and standard Linux tools (grep, lsmod, iw).
-- **FR-010**: HaLow Tier B MUST connect to mesh service via gRPC on configurable host:port (default localhost:5102) and report mesh association, peers, and connectivity.
+- **FR-010**: HaLow Tier B MUST call mesh service REST status on configurable host:port (default localhost:5102, `GET /api/status`) and report mesh association, peers, and connectivity.
 - **FR-011**: HaLow adapter MUST skip Tier B without failure when mesh service is unavailable, reporting mesh status as NotTested.
 - **FR-012**: RunOrchestrator MUST process adapter results incrementally as each completes, saving evidence and publishing status without waiting for all adapters.
 - **FR-013**: All service connection timeouts MUST be configurable via appsettings, defaulting to 5 seconds.
@@ -134,7 +134,7 @@ The hw-test container runs without --privileged mode. It requires only --network
 - **GpsAdapter**: Connects to gps-svc TCP 2947; streams GNSS fix data; replaces pgrep-based availability check with TCP connect.
 - **CompassAdapter**: gRPC client to compass-svc :5100; retrieves heading/magnetometer data; replaces I2C bus access.
 - **SdrAdapter**: gRPC client to sdr-svc :5101; retrieves device status/capabilities; replaces SoapySDRUtil shell commands.
-- **HalowAdapter**: Two-tier: Tier A (direct hardware via /sys + iw, preserved from current) + Tier B (gRPC to mesh :5102, new).
+- **HalowAdapter**: Two-tier: Tier A (direct hardware via /sys + iw, preserved from current) + Tier B (REST to mesh :5102, new).
 - **RunOrchestrator**: Manages adapter execution with incremental result processing instead of Task.WhenAll.
 
 ## Success Criteria *(mandatory)*
@@ -152,7 +152,7 @@ The hw-test container runs without --privileged mode. It requires only --network
 ## Assumptions
 
 - gps-svc, compass-svc, sdr-svc, and zSCOUT-mesh containers are deployed and managed separately — hw-test only needs network access to them.
-- The gRPC service APIs (compass-svc, sdr-svc, mesh) use standard gRPC with protobuf; .proto definitions will be defined in this project for the client side.
+- The service APIs are mixed by design: compass-svc and sdr-svc use gRPC with protobuf; zSCOUT-mesh Tier B uses REST/SSE on port 5102.
 - gpspipe TCP streaming to gps-svc on port 2947 uses the same gpsd protocol as the current direct gpsd connection.
 - The host networking mode (--network host) provides access to all Tier 2 service ports on localhost.
 - HaLow Tier A tools (iw, lsmod, grep) are available in the base Docker image or installed via apt.

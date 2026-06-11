@@ -5,7 +5,7 @@
 ## Task 1: Add gRPC NuGet packages and proto infrastructure
 - Add Grpc.Net.Client, Google.Protobuf, Grpc.Tools to Directory.Packages.props
 - Add package references to ZScout.HwTest.App.csproj
-- Create Protos/ directory with compass.proto, sdr.proto, mesh.proto
+- Create Protos/ directory with compass.proto, sdr.proto
 - Configure .csproj for proto file compilation
 - Verify: `dotnet build zSCOUT-hw-test.slnx`
 
@@ -34,10 +34,9 @@
 - Make endpoint configurable via IConfiguration
 - Build HealthSnapshot with device_found, capabilities data
 
-## Task 6: Extend HalowAdapter — Add Tier B mesh gRPC
+## Task 6: Extend HalowAdapter — Add Tier B mesh REST
 - Preserve existing Tier A (Layers 0-3) exactly as-is
-- Add Tier B after Tier A passes: gRPC connect to mesh :5102
-- Use MeshService.GetStatus() and MeshService.GetPeers()
+- Add Tier B after Tier A passes: REST call to mesh :5102 (`GET /api/status`)
 - If mesh unavailable, report NotTested (not failure)
 - Extend HealthSnapshot with Tier B fields
 - Add NotTested value to PeripheralStatus enum if needed for mesh reporting
