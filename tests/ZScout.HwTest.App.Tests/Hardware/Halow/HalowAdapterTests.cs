@@ -227,4 +227,117 @@ public sealed class HalowAdapterTests
 	{
 		Assert.Null(HalowAdapter.ParseSupportedChannels(""));
 	}
+
+	// ── Morse interface selection (#97) ─────────────────────────────────
+
+	[Fact]
+	public void SelectMorseInterface_PrefersMorseUsbDriver()
+	{
+		var drivers = new Dictionary<string, string?>
+		{
+			["lo"] = null,
+			["wlan0"] = "brcmfmac",
+			["wlan1"] = "morse_usb",
+		};
+
+		var (iface, driver) = HalowAdapter.SelectMorseInterface(
+			drivers.Keys, name => drivers[name]);
+
+		Assert.Equal("wlan1", iface);
+		Assert.Equal("morse_usb", driver);
+	}
+
+	[Fact]
+	public void SelectMorseInterface_IgnoresOnboardWifi()
+	{
+		var drivers = new Dictionary<string, string?>
+		{
+			["wlan0"] = "brcmfmac",
+		};
+
+		var (iface, driver) = HalowAdapter.SelectMorseInterface(
+			drivers.Keys, name => drivers[name]);
+
+		Assert.Null(iface);
+		Assert.Null(driver);
+	}
+
+	[Fact]
+	public void SelectMorseInterface_FallsBackToDriverContainingMorse()
+	{
+		var drivers = new Dictionary<string, string?>
+		{
+			["wlan0"] = "brcmfmac",
+			["wlan2"] = "morse",
+		};
+
+		var (iface, driver) = HalowAdapter.SelectMorseInterface(
+			drivers.Keys, name => drivers[name]);
+
+		Assert.Equal("wlan2", iface);
+		Assert.Equal("morse", driver);
+	}
+
+	// ── iw scan parsing (#97) ───────────────────────────────────────────
+
+	[Fact]
+	public void ParseScanResults_WithSingleBss_ReturnsNode()
+	{
+		const string scanOutput = """
+			BSS 0c:bf:74:11:22:33(on wlan1)
+				freq: 9025
+				signal: -31.00 dBm
+				SSID: GL-MT3000-970
+			""";
+
+		var nodes = HalowAdapter.ParseScanResults(scanOutput);
+
+		var node = Assert.Single(nodes);
+		Assert.Equal("0c:bf:74:11:22:33", node.Bssid);
+		Assert.Equal("GL-MT3000-970", node.Ssid);
+		Assert.Equal("9025", node.Frequency);
+		Assert.Equal("-31.00 dBm", node.Signal);
+	}
+
+	[Fact]
+	public void ParseScanResults_WithMultipleBss_ReturnsAll()
+	{
+		const string scanOutput = """
+			BSS aa:bb:cc:dd:ee:01(on wlan1)
+				freq: 9025
+				signal: -40.00 dBm
+				SSID: NodeOne
+			BSS aa:bb:cc:dd:ee:02(on wlan1)
+				freq: 9035
+				signal: -55.00 dBm
+				SSID: NodeTwo
+			""";
+
+		var nodes = HalowAdapter.ParseScanResults(scanOutput);
+
+		Assert.Equal(2, nodes.Count);
+		Assert.Equal("NodeOne", nodes[0].Ssid);
+		Assert.Equal("NodeTwo", nodes[1].Ssid);
+	}
+
+	[Fact]
+	public void ParseScanResults_WithEmptyOutput_ReturnsEmpty()
+	{
+		Assert.Empty(HalowAdapter.ParseScanResults(""));
+	}
+
+	[Fact]
+	public void ParseScanResults_WithHiddenSsid_LeavesSsidNull()
+	{
+		const string scanOutput = """
+			BSS aa:bb:cc:dd:ee:03(on wlan1)
+				freq: 9025
+				signal: -60.00 dBm
+				SSID: 
+			""";
+
+		var node = Assert.Single(HalowAdapter.ParseScanResults(scanOutput));
+		Assert.Null(node.Ssid);
+		Assert.Equal("aa:bb:cc:dd:ee:03", node.Bssid);
+	}
 }

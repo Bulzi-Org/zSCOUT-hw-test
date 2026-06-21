@@ -28,6 +28,9 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 	/// <summary>Morse Micro USB vendor ID.</summary>
 	private const string MorseVendorId = "325b";
 
+	/// <summary>Kernel driver name bound to the Morse Micro MM8108 netdev.</summary>
+	private const string MorseDriverName = "morse_usb";
+
 	/// <summary>Known kernel module names for the Morse Micro driver.</summary>
 	private static readonly string[] ModuleNames = ["morse", "morse_driver", "dot11ah"];
 
@@ -91,12 +94,24 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		// ── Layer 3 — Radio health check ──────────────────────────────────
 		await ProbeRadioHealthAsync(ifaceName, messages, snapshot, reportStep, ct);
 
-		_logger.LogInformation("HaLow probe: Tier A passed for interface {Interface}", ifaceName);
+		// ── Layer 4 — RF scan for AP/STA nodes (#97) ──────────────────────
+		// Bring the morse interface up and scan; the HaLow test passes ONLY
+		// when at least one node is seen on the air, not just because the
+		// driver/interface is present.
+		var scanNodeCount = await ProbeScanAsync(ifaceName, messages, snapshot, reportStep, ct);
+
+		_logger.LogInformation(
+			"HaLow probe: Tier A complete for interface {Interface}, scan found {NodeCount} node(s)",
+			ifaceName, scanNodeCount);
 
 		// ── Tier B — Mesh Connectivity (FR-008, FR-010, FR-011) ─────────
 		await ProbeMeshAsync(messages, snapshot, reportStep, ct);
 
-		return BuildEnvelope(PeripheralStatus.Ready, true, messages, snapshot);
+		// Ready only when the scan found >= 1 node. If the driver and morse
+		// interface are present but no nodes were found, report Degraded so
+		// the test does not pass on driver presence alone.
+		var status = scanNodeCount >= 1 ? PeripheralStatus.Ready : PeripheralStatus.Degraded;
+		return BuildEnvelope(status, true, messages, snapshot);
 	}
 
 	/// <inheritdoc />
@@ -245,24 +260,37 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		Func<string, string, bool, Task>? reportStep,
 		CancellationToken ct)
 	{
-		// iw dev — find wireless interfaces
+		// iw dev — enumerate wireless interfaces (diagnostic context only)
 		var iwDevResult = await ProcessHelper.RunAsync("iw", "dev", 5_000, ct);
 		if (reportStep is not null)
 			await reportStep("iw dev", iwDevResult.Stdout + iwDevResult.Stderr, iwDevResult.ExitCode != 0);
 
-		var ifaceName = ParseInterfaceName(iwDevResult.Stdout);
+		// Select the morse-specific interface by its kernel driver (morse_usb)
+		// from /sys/class/net/<iface>/device/driver. This avoids the previous
+		// bug of picking the first `iw dev` interface, which is the onboard
+		// Broadcom Wi-Fi on the CM5 (a false positive). (#97)
+		var (ifaceName, ifaceDriver) = FindMorseInterface();
 
 		snapshot["interface_name"] = ifaceName;
+		snapshot["morse_interface"] = ifaceName;
+
+		if (reportStep is not null)
+			await reportStep(
+				"resolve morse interface (/sys/class/net/*/device/driver)",
+				ifaceName is null
+					? "no netdev bound to morse_usb driver found"
+					: $"{ifaceName} (driver={ifaceDriver})",
+				ifaceName is null);
 
 		if (ifaceName is null)
 		{
 			snapshot["phy_name"] = null;
 			snapshot["supported_channels"] = null;
-			messages.Add("Layer 2 FAIL: no wireless interface found via iw dev");
+			messages.Add("Layer 2 FAIL: no morse_usb wireless interface found (onboard Wi-Fi ignored)");
 			return (null, null, null);
 		}
 
-		messages.Add($"Layer 2: wireless interface {ifaceName} found");
+		messages.Add($"Layer 2: morse wireless interface {ifaceName} found (driver {ifaceDriver})");
 
 		// iw phy — capture radio capabilities
 		var iwPhyResult = await ProcessHelper.RunAsync("iw", "phy", 5_000, ct);
@@ -325,6 +353,68 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 			messages.Add($"Layer 3: interface info captured for {ifaceName}");
 
 		messages.Add("Layer 3 PASS: radio health check complete");
+	}
+
+	/// <summary>
+	/// Layer 4 (#97): Bring the morse interface up and run <c>iw dev &lt;iface&gt; scan</c>
+	/// to discover HaLow AP/STA nodes on the air. Records the node count and a
+	/// per-node summary (SSID/BSSID/freq/signal) into the snapshot. Returns the
+	/// number of nodes found so the caller can gate Ready vs. Degraded.
+	/// </summary>
+	private async Task<int> ProbeScanAsync(
+		string ifaceName,
+		List<string> messages,
+		Dictionary<string, object?> snapshot,
+		Func<string, string, bool, Task>? reportStep,
+		CancellationToken ct)
+	{
+		// The morse interface must be administratively up before nl80211 will
+		// allow a scan. Requires NET_ADMIN (granted via docker-compose cap_add).
+		var ipResult = await ProcessHelper.RunAsync("ip", $"link set {ifaceName} up", 5_000, ct);
+		if (reportStep is not null)
+			await reportStep($"ip link set {ifaceName} up", ipResult.Stdout + ipResult.Stderr, ipResult.ExitCode != 0);
+
+		if (ipResult.ExitCode != 0)
+			messages.Add($"Layer 4: warning — failed to bring {ifaceName} up (exit {ipResult.ExitCode}); scanning anyway");
+
+		// Active scan. S1G scans can take several seconds; allow ~20s.
+		var scanResult = await ProcessHelper.RunAsync("iw", $"dev {ifaceName} scan", 20_000, ct);
+		if (reportStep is not null)
+			await reportStep($"iw dev {ifaceName} scan", scanResult.Stdout + scanResult.Stderr, scanResult.ExitCode != 0);
+
+		if (scanResult.ExitCode != 0)
+		{
+			snapshot["scan_node_count"] = 0;
+			snapshot["scan_nodes"] = new List<Dictionary<string, object?>>();
+			messages.Add($"Layer 4 FAIL: scan on {ifaceName} failed (exit {scanResult.ExitCode}) — no nodes found");
+			return 0;
+		}
+
+		var nodes = ParseScanResults(scanResult.Stdout);
+		var nodeList = nodes
+			.Select(n => new Dictionary<string, object?>
+			{
+				["ssid"] = n.Ssid,
+				["bssid"] = n.Bssid,
+				["freq"] = n.Frequency,
+				["signal"] = n.Signal,
+			})
+			.ToList();
+
+		snapshot["scan_node_count"] = nodeList.Count;
+		snapshot["scan_nodes"] = nodeList;
+
+		if (nodeList.Count == 0)
+		{
+			messages.Add($"Layer 4: scan on {ifaceName} completed but found 0 AP/STA nodes — Degraded");
+			return 0;
+		}
+
+		foreach (var n in nodes)
+			messages.Add($"Layer 4: node {n.Ssid ?? "<hidden>"} ({n.Bssid}) freq={n.Frequency ?? "?"} signal={n.Signal ?? "?"}");
+
+		messages.Add($"Layer 4 PASS: scan found {nodeList.Count} AP/STA node(s) on {ifaceName}");
+		return nodeList.Count;
 	}
 
 	/// <summary>
@@ -490,6 +580,141 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		return frequencies.Count > 0 ? string.Join(", ", frequencies) : null;
 	}
 
+	/// <summary>
+	/// Resolves the morse-specific network interface by inspecting the kernel
+	/// driver bound to each netdev under <c>/sys/class/net</c>. Returns the
+	/// interface name and its driver, or <c>(null, null)</c> if no morse netdev
+	/// is present. The onboard Wi-Fi (e.g. brcmfmac) is never selected. (#97)
+	/// </summary>
+	private (string? Interface, string? Driver) FindMorseInterface()
+	{
+		const string netDir = "/sys/class/net";
+		try
+		{
+			if (!Directory.Exists(netDir))
+				return (null, null);
+
+			var ifaces = Directory
+				.EnumerateFileSystemEntries(netDir)
+				.Select(p => Path.GetFileName(p.TrimEnd('/')))
+				.Where(n => !string.IsNullOrEmpty(n))
+				.Select(n => n!)
+				.OrderBy(n => n, StringComparer.Ordinal)
+				.ToList();
+
+			return SelectMorseInterface(ifaces, ResolveInterfaceDriver);
+		}
+		catch (Exception ex)
+		{
+			_logger.LogDebug(ex, "FindMorseInterface failed enumerating {NetDir}", netDir);
+			return (null, null);
+		}
+	}
+
+	/// <summary>
+	/// Resolves the driver name bound to a netdev via
+	/// <c>/sys/class/net/&lt;iface&gt;/device/driver</c> (a symlink whose final
+	/// path segment is the driver, e.g. <c>morse_usb</c>). Returns null if the
+	/// netdev has no bound driver (e.g. virtual interfaces like <c>lo</c>).
+	/// </summary>
+	private static string? ResolveInterfaceDriver(string iface)
+	{
+		try
+		{
+			var driverLink = $"/sys/class/net/{iface}/device/driver";
+			var target = Directory.ResolveLinkTarget(driverLink, returnFinalTarget: true);
+			if (target is null)
+				return null;
+			return Path.GetFileName(target.FullName.TrimEnd('/'));
+		}
+		catch
+		{
+			return null;
+		}
+	}
+
+	/// <summary>
+	/// Pure selection logic (unit-testable): given candidate interface names and
+	/// a driver resolver, returns the interface bound to <c>morse_usb</c>, or as
+	/// a fallback the first interface whose driver name contains "morse".
+	/// </summary>
+	internal static (string? Interface, string? Driver) SelectMorseInterface(
+		IEnumerable<string> interfaces,
+		Func<string, string?> driverResolver)
+	{
+		var resolved = interfaces
+			.Select(iface => (Interface: iface, Driver: driverResolver(iface)))
+			.Where(x => !string.IsNullOrEmpty(x.Driver))
+			.ToList();
+
+		// Exact morse_usb match preferred.
+		var exact = resolved.FirstOrDefault(x =>
+			string.Equals(x.Driver, MorseDriverName, StringComparison.OrdinalIgnoreCase));
+		if (exact.Interface is not null)
+			return (exact.Interface, exact.Driver);
+
+		// Fallback: any driver containing "morse".
+		var fuzzy = resolved.FirstOrDefault(x =>
+			x.Driver!.Contains("morse", StringComparison.OrdinalIgnoreCase));
+		return fuzzy.Interface is not null ? (fuzzy.Interface, fuzzy.Driver) : (null, null);
+	}
+
+	/// <summary>
+	/// Parses <c>iw dev &lt;iface&gt; scan</c> output into a list of BSS entries.
+	/// Each entry captures BSSID, SSID, frequency and signal where available.
+	/// </summary>
+	internal static List<ScanNode> ParseScanResults(string iwScanOutput)
+	{
+		var nodes = new List<ScanNode>();
+		if (string.IsNullOrWhiteSpace(iwScanOutput))
+			return nodes;
+
+		ScanNode? current = null;
+		foreach (var raw in iwScanOutput.Split('\n', StringSplitOptions.None))
+		{
+			var line = raw.Trim();
+			if (line.Length == 0)
+				continue;
+
+			var bssMatch = BssRegex().Match(line);
+			if (bssMatch.Success)
+			{
+				current = new ScanNode { Bssid = bssMatch.Groups[1].Value.ToLowerInvariant() };
+				nodes.Add(current);
+				continue;
+			}
+
+			if (current is null)
+				continue;
+
+			if (line.StartsWith("SSID:", StringComparison.OrdinalIgnoreCase))
+			{
+				current.Ssid = line["SSID:".Length..].Trim();
+				if (current.Ssid.Length == 0)
+					current.Ssid = null;
+			}
+			else if (line.StartsWith("freq:", StringComparison.OrdinalIgnoreCase))
+			{
+				current.Frequency = line["freq:".Length..].Trim();
+			}
+			else if (line.StartsWith("signal:", StringComparison.OrdinalIgnoreCase))
+			{
+				current.Signal = line["signal:".Length..].Trim();
+			}
+		}
+
+		return nodes;
+	}
+
+	/// <summary>A single AP/STA node discovered by an <c>iw scan</c>.</summary>
+	internal sealed class ScanNode
+	{
+		public string Bssid { get; set; } = string.Empty;
+		public string? Ssid { get; set; }
+		public string? Frequency { get; set; }
+		public string? Signal { get; set; }
+	}
+
 	/// <summary>All keys required in HealthSnapshot.Values per FR-008/FR-009/FR-010.</summary>
 	private static readonly string[] RequiredSnapshotKeys =
 	[
@@ -500,9 +725,13 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		"firmware_loaded",
 		"firmware_version",
 		"interface_name",
+		"morse_interface",
 		"phy_name",
 		"supported_channels",
 		"health_check_ok",
+		// Layer 4 RF scan (#97)
+		"scan_node_count",
+		"scan_nodes",
 		// Tier B (FR-010)
 		"mesh_service_available",
 		"mesh_associated",
@@ -517,4 +746,7 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 
 	[GeneratedRegex(@"\*\s+(\d+)\s+MHz")]
 	private static partial Regex FrequencyRegex();
+
+	[GeneratedRegex(@"^BSS\s+([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})", RegexOptions.IgnoreCase)]
+	private static partial Regex BssRegex();
 }
