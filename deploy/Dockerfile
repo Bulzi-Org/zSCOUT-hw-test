@@ -33,8 +33,9 @@ WORKDIR /app
 # Note: i2c-tools removed — compass now uses compass-svc REST API (FR-004)
 # Note: gpsd-clients removed — GPS now uses gps-svc REST API (#35)
 # Kept: iw/usbutils/kmod (HaLow Tier A), pciutils
+# iproute2 added for `ip link set <iface> up` before the HaLow scan (#97)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl iw usbutils kmod pciutils && \
+    curl iw iproute2 usbutils kmod pciutils && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy published application from build stage

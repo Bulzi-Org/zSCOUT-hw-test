@@ -76,6 +76,12 @@ services:
     network_mode: host # Required for REST/TCP connections to Tier 2 services
     # Note: --privileged removed — adapters now use Tier 2 service REST APIs (FR-014)
 
+    # HaLow Layer 4 scan (#97): bringing the morse iface up and running
+    # `iw dev <iface> scan` is a privileged nl80211 op requiring NET_ADMIN.
+    # NET_ADMIN only — still NOT --privileged.
+    cap_add:
+      - NET_ADMIN
+
     # Port mapping (only active in bridge mode, ignored with network_mode: host)
     # ports:
     #   - "5000:5000"
