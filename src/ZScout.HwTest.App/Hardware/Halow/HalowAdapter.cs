@@ -154,9 +154,12 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		Func<string, string, bool, Task>? reportStep,
 		CancellationToken ct)
 	{
-		// Search sysfs for Morse Micro vendor ID in USB device tree
+		// Search sysfs for the Morse Micro vendor ID in the USB device tree.
+		// Run grep through a shell so the '*' glob is expanded. ProcessHelper uses
+		// UseShellExecute=false (direct exec, no shell), so a glob passed straight to
+		// grep is taken literally and fails with "No such file or directory" (#99).
 		var findResult = await ProcessHelper.RunAsync(
-			"grep", $"-rl {MorseVendorId} /sys/bus/usb/devices/*/idVendor",
+			"/bin/sh", $"-c \"grep -rl {MorseVendorId} /sys/bus/usb/devices/*/idVendor\"",
 			5_000, ct);
 
 		if (reportStep is not null)
