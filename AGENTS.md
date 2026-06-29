@@ -38,6 +38,10 @@ Board: https://github.com/orgs/Bulzi-Org/projects/1
 - Test: `dotnet test zSCOUT-hw-test.slnx`
 - Always run both before committing
 
+## HaLow Mesh Operator Defaults
+
+When adding or configuring the `zscout-mesh` service in the deploy stack, use `deploy/.env.example` as the canonical template. The mesh SAE passphrase is **`MESH_KEY=zMesh-01`** — must match the MeshGate Key field. SSID: `zSCOUT-Mesh`, channel 28, gate `10.41.0.1`, node `10.41.0.2/16`.
+
 ## Conventions
 - Do not add co-author lines to commit messages
 - PR branches: `fix/<issue>-<short-desc>` or `feat/<issue>-<short-desc>`
