@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -324,6 +325,51 @@ public sealed class HalowAdapterTests
 	public void ParseScanResults_WithEmptyOutput_ReturnsEmpty()
 	{
 		Assert.Empty(HalowAdapter.ParseScanResults(""));
+	}
+
+	[Fact]
+	public void ParseMeshStatusFields_ReadsSnakeCaseAndCamelCaseAliases()
+	{
+		const string json = """
+			{
+			  "associated": true,
+			  "peer_count": 2,
+			  "gateway_mode": "client",
+			  "bat0_ip": "10.41.0.2",
+			  "internet_reachable": true,
+			  "status_message": "mesh active"
+			}
+			""";
+
+		using var doc = JsonDocument.Parse(json);
+		var fields = HalowAdapter.ParseMeshStatusFields(doc.RootElement);
+
+		Assert.True(fields.Associated);
+		Assert.Equal(2, fields.PeerCount);
+		Assert.Equal("client", fields.GatewayMode);
+		Assert.Equal("10.41.0.2", fields.Bat0Ip);
+		Assert.True(fields.InternetReachable);
+	}
+
+	[Fact]
+	public void ParseMeshStatusFields_FallsBackToCamelCaseKeys()
+	{
+		const string json = """
+			{
+			  "peerCount": 1,
+			  "gatewayMode": "client",
+			  "bat0Ip": "10.41.0.3",
+			  "internetReachable": false,
+			  "bat0Up": true
+			}
+			""";
+
+		using var doc = JsonDocument.Parse(json);
+		var fields = HalowAdapter.ParseMeshStatusFields(doc.RootElement);
+
+		Assert.True(fields.Associated);
+		Assert.Equal(1, fields.PeerCount);
+		Assert.False(fields.InternetReachable);
 	}
 
 	[Fact]

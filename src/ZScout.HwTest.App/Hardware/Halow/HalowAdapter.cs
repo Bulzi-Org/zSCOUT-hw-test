@@ -465,12 +465,13 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 			using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(statusCts.Token), cancellationToken: statusCts.Token);
 			var root = doc.RootElement;
 
-			var associated = root.TryGetProperty("associated", out var assocEl) && assocEl.GetBoolean();
-			var peerCount = root.TryGetProperty("peer_count", out var pcEl) ? pcEl.GetInt32() : 0;
-			var gatewayMode = root.TryGetProperty("gateway_mode", out var gwEl) ? gwEl.GetString() ?? "" : "";
-			var bat0Ip = root.TryGetProperty("bat0_ip", out var batEl) ? batEl.GetString() ?? "" : "";
-			var internetReachable = root.TryGetProperty("internet_reachable", out var inetEl) && inetEl.GetBoolean();
-			var meshStatusMessage = root.TryGetProperty("status_message", out var msmEl) ? msmEl.GetString() ?? "" : "";
+			var meshFields = ParseMeshStatusFields(root);
+			var associated = meshFields.Associated;
+			var peerCount = meshFields.PeerCount;
+			var gatewayMode = meshFields.GatewayMode;
+			var bat0Ip = meshFields.Bat0Ip;
+			var internetReachable = meshFields.InternetReachable;
+			var meshStatusMessage = meshFields.StatusMessage;
 
 			if (reportStep is not null)
 				await reportStep("GET /api/status",
@@ -483,9 +484,12 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 			snapshot["bat0_ip"] = bat0Ip;
 			snapshot["internet_reachable"] = internetReachable;
 
-			var tierBSummary = associated
-				? $"Tier B PASS: mesh associated, {peerCount} peers, gw={gatewayMode}, bat0={bat0Ip}, inet={internetReachable}"
-				: $"Tier B: mesh not associated — {meshStatusMessage}";
+			var tierBPass = associated && peerCount >= 1 && internetReachable;
+			var tierBSummary = tierBPass
+				? $"Tier B PASS: mesh associated, {peerCount} peers, gw={gatewayMode}, bat0={bat0Ip}, internet reachable"
+				: associated
+					? $"Tier B: mesh associated but internet probe failed — {meshStatusMessage}"
+					: $"Tier B: mesh not associated — {meshStatusMessage}";
 			messages.Add(tierBSummary);
 			_logger.LogInformation("HaLow Tier B: associated={Associated} peers={PeerCount}", associated, peerCount);
 		}
@@ -507,6 +511,62 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 	}
 
 	// ── Helpers ──────────────────────────────────────────────────────────
+
+	internal static MeshStatusFields ParseMeshStatusFields(JsonElement root)
+	{
+		var peerCount = TryGetInt32(root, "peer_count", "peerCount") ?? 0;
+		var bat0Up = TryGetBoolean(root, "bat0Up") ?? false;
+		var associated = TryGetBoolean(root, "associated")
+			?? (bat0Up && peerCount >= 1);
+		return new MeshStatusFields(
+			Associated: associated,
+			PeerCount: peerCount,
+			GatewayMode: TryGetString(root, "gateway_mode", "gatewayMode") ?? "",
+			Bat0Ip: TryGetString(root, "bat0_ip", "bat0Ip") ?? "",
+			InternetReachable: TryGetBoolean(root, "internet_reachable", "internetReachable") ?? false,
+			StatusMessage: TryGetString(root, "status_message", "statusMessage") ?? "");
+	}
+
+	private static bool? TryGetBoolean(JsonElement root, params string[] names)
+	{
+		foreach (var name in names)
+		{
+			if (root.TryGetProperty(name, out var el) && el.ValueKind is JsonValueKind.True or JsonValueKind.False)
+				return el.GetBoolean();
+		}
+
+		return null;
+	}
+
+	private static int? TryGetInt32(JsonElement root, params string[] names)
+	{
+		foreach (var name in names)
+		{
+			if (root.TryGetProperty(name, out var el) && el.TryGetInt32(out var value))
+				return value;
+		}
+
+		return null;
+	}
+
+	private static string? TryGetString(JsonElement root, params string[] names)
+	{
+		foreach (var name in names)
+		{
+			if (root.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.String)
+				return el.GetString();
+		}
+
+		return null;
+	}
+
+	internal readonly record struct MeshStatusFields(
+		bool Associated,
+		int PeerCount,
+		string GatewayMode,
+		string Bat0Ip,
+		bool InternetReachable,
+		string StatusMessage);
 
 	/// <summary>
 	/// Builds a <see cref="DiagnosticEnvelope"/> from the collected data.

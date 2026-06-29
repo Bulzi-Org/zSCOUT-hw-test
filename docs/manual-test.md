@@ -218,11 +218,42 @@ find /sys/bus/sdio/devices /sys/bus/pci/devices -name '*morse*' 2>/dev/null
 # Expected: one or more sysfs paths, e.g. /sys/bus/sdio/devices/mmc0:0001:1
 ```
 
+### Tier B — Mesh + internet via MeshGate (dashboard)
+
+When `zscout-mesh` is running (hw-test deploy stack), the HaLow adapter probes
+`GET http://localhost:5102/api/status` for Tier B mesh connectivity.
+
+**Success criteria (Tier B PASS):**
+
+- `mesh_service_available` = true
+- `associated` = true
+- `peer_count` >= 1
+- `internet_reachable` = true (probe bound through `bat0`, not management WiFi)
+
+Tier A may show **Degraded** if the RF scan does not see nodes independently;
+Tier B PASS is the milestone for mesh-backhaul internet validation.
+
+**Per-node mesh config** (`/opt/zscout/hw-test/.env`):
+
+```bash
+MESH_KEY=zMesh-01
+MESH_NODE_IP=10.41.0.2/16    # unique per CM5 (.3, .4, ...)
+MESH_DEFAULT_ROUTE_METRIC=0  # mesh-only backhaul (no Ethernet)
+```
+
+**Cross-check on CM5:**
+
+```bash
+curl -s http://localhost:5102/api/status | jq .
+ip route show default
+# Expected default route: via 10.41.0.1 dev bat0
+```
+
 ### Container shell
 
 ```bash
 # The container shares the host kernel, host /sys, and host network interfaces
-# via network_mode: host and privileged: true.
+# via network_mode: host and NET_ADMIN (HaLow scan only).
 
 # 1. Check module is loaded (reads /proc/modules — shared with host)
 lsmod | grep morse

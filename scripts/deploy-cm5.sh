@@ -16,7 +16,7 @@
 # What this script does:
 #   1. Creates /opt/zscout/hw-test/ deployment directory
 #   2. Downloads the latest docker-compose.yml from GitHub
-#   3. Pulls all container images (hw-test + gps-svc + compass-svc + sdr-svc)
+#   3. Pulls all container images (hw-test + gps/compass/sdr/mesh services)
 #   4. Starts all services with health-check ordering
 #   5. Waits for the dashboard to become healthy
 #   6. Prints the dashboard URL
@@ -27,6 +27,7 @@
 
 DEPLOY_DIR="/opt/zscout/hw-test"
 COMPOSE_URL="https://raw.githubusercontent.com/Bulzi-Org/zSCOUT-hw-test/main/deploy/docker-compose.yml"
+ENV_EXAMPLE_URL="https://raw.githubusercontent.com/Bulzi-Org/zSCOUT-hw-test/main/deploy/.env.example"
 DASHBOARD_PORT=5000
 
 info()  { printf '\033[1;34m[INFO]\033[0m  %s\n' "$1"; }
@@ -117,10 +118,49 @@ if ! curl -fsSL -o "${DEPLOY_DIR}/docker-compose.yml" "${COMPOSE_URL}"; then
 fi
 ok "docker-compose.yml downloaded"
 
+# ── Mesh environment (.env) ───────────────────────────────────────────────────
+
+info "Ensuring mesh environment file exists"
+if ! curl -fsSL -o "${DEPLOY_DIR}/.env.example" "${ENV_EXAMPLE_URL}"; then
+    error "Failed to download .env.example"
+    exit 1
+fi
+
+if [ ! -f "${DEPLOY_DIR}/.env" ]; then
+    cp "${DEPLOY_DIR}/.env.example" "${DEPLOY_DIR}/.env"
+    warn "Created ${DEPLOY_DIR}/.env from template"
+    warn "Set a unique MESH_NODE_IP per CM5 (.2, .3, ...) before multi-node deploy"
+else
+    ok ".env already present — keeping existing mesh configuration"
+fi
+
+# ── Management WiFi must not steal the default route ───────────────────────────
+# Field nodes use HaLow mesh as the only internet backhaul. Management WiFi is
+# for SSH/dashboard access only.
+
+configure_management_wifi_routing() {
+    if ! command -v nmcli &>/dev/null; then
+        warn "nmcli not available — skipping WiFi default-route guard"
+        return 0
+    fi
+
+    info "Configuring management WiFi connections: never-default, high route metric"
+    while IFS= read -r conn; do
+        [ -n "$conn" ] || continue
+        if sudo nmcli connection modify "$conn" ipv4.never-default yes ipv4.route-metric 600 2>/dev/null; then
+            ok "WiFi connection '${conn}' will not install a default route"
+        else
+            warn "Could not update WiFi connection '${conn}'"
+        fi
+    done < <(nmcli -t -f NAME,TYPE connection show 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1}')
+}
+
+configure_management_wifi_routing
+
 # ── Pull all images ───────────────────────────────────────────────────────────
 
 info "Pulling container images (this may take a few minutes on first run)..."
-if ! docker compose -f "${DEPLOY_DIR}/docker-compose.yml" pull; then
+if ! docker compose -f "${DEPLOY_DIR}/docker-compose.yml" --env-file "${DEPLOY_DIR}/.env" pull; then
     error "Failed to pull one or more images"
     exit 1
 fi
@@ -130,13 +170,13 @@ ok "All images pulled"
 
 if docker compose -f "${DEPLOY_DIR}/docker-compose.yml" ps -q 2>/dev/null | grep -q .; then
     info "Stopping existing containers..."
-    docker compose -f "${DEPLOY_DIR}/docker-compose.yml" down
+    docker compose -f "${DEPLOY_DIR}/docker-compose.yml" --env-file "${DEPLOY_DIR}/.env" down
 fi
 
 # ── Start services ────────────────────────────────────────────────────────────
 
 info "Starting all services..."
-if ! docker compose -f "${DEPLOY_DIR}/docker-compose.yml" up -d; then
+if ! docker compose -f "${DEPLOY_DIR}/docker-compose.yml" --env-file "${DEPLOY_DIR}/.env" up -d; then
     error "Failed to start services"
     docker compose -f "${DEPLOY_DIR}/docker-compose.yml" logs --tail=20
     exit 1
