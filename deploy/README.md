@@ -194,6 +194,27 @@ and mounts `/dev` and `/sys` with `privileged: true` so the container can
 reach all hardware paths. The dashboard is then available at
 `http://<cm5-ip>:5000`.
 
+### Recommended CM5 deploy (includes mesh)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Bulzi-Org/zSCOUT-hw-test/main/scripts/deploy-cm5.sh | bash
+```
+
+The script installs compose to `/opt/zscout/hw-test/`, creates `.env` from
+`.env.example`, configures management WiFi with `ipv4.never-default` (so
+internet uses HaLow mesh only), and starts gps/compass/sdr/**mesh**/hw-test.
+
+**Per-node mesh settings** — edit `/opt/zscout/hw-test/.env` before starting
+additional CM5 units:
+
+| Variable | Node 1 | Node 2 | Notes |
+|----------|--------|--------|-------|
+| `MESH_NODE_IP` | `10.41.0.2/16` | `10.41.0.3/16` | Must be unique |
+| `MESH_KEY` | `zMesh-01` | `zMesh-01` | Must match MeshGate |
+| `MESH_DEFAULT_ROUTE_METRIC` | `0` | `0` | Mesh-only backhaul |
+
+Verify mesh API: `curl -s http://localhost:5102/api/status`
+
 ---
 
 ## Option 2 — Offline / air-gapped deployment

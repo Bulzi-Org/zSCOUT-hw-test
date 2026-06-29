@@ -32,6 +32,29 @@ services:
       retries: 3
       start_period: 10s
 
+  mesh:
+    image: ghcr.io/bulzi-org/zscout-mesh:latest
+    container_name: zscout-mesh
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    volumes:
+      - /lib/modules:/lib/modules:ro
+      - /lib/firmware:/lib/firmware:ro
+      - /sys:/sys:rw
+      - /dev:/dev
+    env_file:
+      - .env
+    healthcheck:
+      test: [ "CMD", "wget", "-q", "--spider", "http://127.0.0.1:5102/api/status" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+
   sdr-svc:
     image: ghcr.io/bulzi-org/zscout-sdr-svc:latest
     container_name: zscout-sdr-svc
@@ -70,6 +93,8 @@ services:
       compass-svc:
         condition: service_healthy
       sdr-svc:
+        condition: service_healthy
+      mesh:
         condition: service_healthy
 
     # Networking for Tier 2 service access (gps-svc, compass-svc, sdr-svc)
