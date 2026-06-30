@@ -17,6 +17,7 @@ public sealed class RunOrchestrator
 	private readonly IEnumerable<IHardwareAdapter> _adapters;
 	private readonly RunRepository _runs;
 	private readonly EvidenceRepository _evidence;
+	private readonly VerdictRepository _verdicts;
 	private readonly LiveEventPublisher _events;
 	private readonly RunCancellationService _cancellation;
 	private readonly CommandLogRepository _commandLog;
@@ -36,6 +37,7 @@ public sealed class RunOrchestrator
 		IEnumerable<IHardwareAdapter> adapters,
 		RunRepository runs,
 		EvidenceRepository evidence,
+		VerdictRepository verdicts,
 		CommandLogRepository commandLog,
 		LiveEventPublisher events,
 		TelemetryStreamWriter telemetry,
@@ -45,6 +47,7 @@ public sealed class RunOrchestrator
 		_adapters = adapters;
 		_runs = runs;
 		_evidence = evidence;
+		_verdicts = verdicts;
 		_commandLog = commandLog;
 		_events = events;
 		_telemetry = telemetry;
@@ -104,6 +107,15 @@ public sealed class RunOrchestrator
 				// Run the adapter until the operator cancels it
 				var (ev, status) = await ProbeAdapterSafeAsync(adapter, run, testCts.Token);
 				await _evidence.SaveAsync(ev, CancellationToken.None);
+
+				if (TryCreateAutoPassVerdict(adapter.PeripheralId, ev, runId, out var autoVerdict))
+				{
+					await _verdicts.SaveAsync(autoVerdict, CancellationToken.None);
+					_logger.LogInformation(
+						"Adapter {Peripheral} auto-pass in run {RunId} — Tier B full success",
+						adapter.PeripheralId, runId);
+					continue;
+				}
 
 				_logger.LogInformation(
 					"Adapter {Peripheral} stopped in run {RunId} — awaiting operator verdict",
@@ -303,5 +315,32 @@ public sealed class RunOrchestrator
 		};
 
 		return (evidence, envelope.Status);
+	}
+
+	private static bool TryCreateAutoPassVerdict(
+		PeripheralId peripheralId,
+		PeripheralEvidence evidence,
+		string runId,
+		out PeripheralVerdict verdict)
+	{
+		verdict = null!;
+		if (peripheralId != PeripheralId.Halow)
+			return false;
+
+		if (!evidence.HealthSnapshot.Values.TryGetValue("tier_b_pass", out var passed)
+			|| passed is not true)
+			return false;
+
+		verdict = new PeripheralVerdict
+		{
+			VerdictId = Guid.NewGuid().ToString("N"),
+			RunId = runId,
+			PeripheralId = peripheralId,
+			Outcome = VerdictOutcome.Pass,
+			FailureReason = null,
+			AssignedByUserId = "auto",
+			AssignedAtUtc = DateTimeOffset.UtcNow,
+		};
+		return true;
 	}
 }

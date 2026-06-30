@@ -154,6 +154,18 @@ else
                         <span class="summary-label">Auto-Discover</span><span>@GetSummaryValue("sdr_autodiscover")</span>
                     </div>
                 }
+                else if (_currentTest == PeripheralId.Halow)
+                {
+                    <div class="summary-grid">
+                        <span class="summary-label">Interface</span><span>@GetSummaryValue("halow_iface")</span>
+                        <span class="summary-label">Associated</span><span>@GetSummaryValue("halow_associated")</span>
+                        <span class="summary-label">Peers</span><span>@GetSummaryValue("halow_peers")</span>
+                        <span class="summary-label">Internet</span><span>@GetSummaryValue("halow_inet")</span>
+                        <span class="summary-label">Probe URL</span><span>@GetSummaryValue("halow_probe_url")</span>
+                        <span class="summary-label">Probe Status</span><span>@GetSummaryValue("halow_probe_status")</span>
+                        <span class="summary-label">Poll Count</span><span>@GetSummaryValue("halow_polls")</span>
+                    </div>
+                }
                 else
                 {
                     <div class="summary-grid">
@@ -490,6 +502,31 @@ else
             else if (e.Command.Contains("AUTO /api/rx/capture", StringComparison.OrdinalIgnoreCase))
             {
                 _summaryValues["sdr_autodiscover"] = o;
+            }
+        }
+        else if (e.PeripheralId == PeripheralId.Halow)
+        {
+            var o = e.Output;
+            if (e.Command == "GET /api/status")
+            {
+                _summaryValues["halow_associated"] = ExtractBetween(o, "associated=", " ");
+                _summaryValues["halow_peers"] = ExtractBetween(o, "peers=", " ");
+                _summaryValues["halow_inet"] = ExtractBetween(o, "inet=", " ");
+                _summaryValues["halow_probe_url"] = ExtractBetween(o, "url=", " ");
+                _summaryValues["halow_probe_status"] = o.Contains("probe=ok", StringComparison.Ordinal)
+                    ? "ok"
+                    : ExtractBetween(o, "probe=", "");
+                _summaryValues["halow_polls"] = _summaryValues.TryGetValue("halow_polls", out var pc) && int.TryParse(pc, out var c)
+                    ? (c + 1).ToString()
+                    : "1";
+            }
+            else if (e.Command.Contains("resolve morse interface", StringComparison.OrdinalIgnoreCase))
+            {
+                _summaryValues["halow_iface"] = o;
+            }
+            else if (e.Command.StartsWith("iw dev ", StringComparison.Ordinal) && e.Command.EndsWith(" info"))
+            {
+                _summaryValues["halow_iface"] = ExtractBetween(o, "Interface ", "\n");
             }
         }
         else
