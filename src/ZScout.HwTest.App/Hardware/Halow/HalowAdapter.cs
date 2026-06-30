@@ -94,23 +94,42 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		// ── Layer 3 — Radio health check ──────────────────────────────────
 		await ProbeRadioHealthAsync(ifaceName, messages, snapshot, reportStep, ct);
 
-		// ── Layer 4 — RF scan for AP/STA nodes (#97) ──────────────────────
-		// Bring the morse interface up and scan; the HaLow test passes ONLY
-		// when at least one node is seen on the air, not just because the
-		// driver/interface is present.
-		var scanNodeCount = await ProbeScanAsync(ifaceName, messages, snapshot, reportStep, ct);
+		// ── Layer 4 / Tier B — RF visibility vs mesh association ───────────
+		// When zscout-mesh owns wlan1, an active `iw scan` disrupts 802.11s mesh
+		// peering and BATMAN-adv neighbors. Probe Tier B first and skip scan.
+		var meshHost = _config["Peripherals:Halow:MeshHost"] ?? "localhost";
+		var meshPort = int.TryParse(_config["Peripherals:Halow:MeshPort"], out var meshPortCfg) ? meshPortCfg : 5102;
+		var meshQuickTimeoutMs = int.TryParse(_config["Peripherals:Halow:MeshQuickTimeoutMs"], out var qtm) ? qtm : 2_000;
+		var meshRunning = await IsMeshServiceReachableAsync(meshHost, meshPort, meshQuickTimeoutMs, ct);
+
+		int scanNodeCount;
+		if (meshRunning)
+		{
+			messages.Add("Layer 4: zscout-mesh active — skipping active iw scan to avoid disrupting BATMAN-adv");
+			await ProbeMeshAsync(messages, snapshot, reportStep, ct, retryWhenNoPeers: true);
+			scanNodeCount = await ProbePassiveRfAsync(ifaceName, messages, snapshot, reportStep, ct);
+
+			if (scanNodeCount < 1
+				&& snapshot.TryGetValue("peer_count", out var peerObj)
+				&& peerObj is int peerCount
+				&& peerCount >= 1)
+			{
+				scanNodeCount = peerCount;
+				snapshot["scan_node_count"] = scanNodeCount;
+			}
+		}
+		else
+		{
+			scanNodeCount = await ProbeScanAsync(ifaceName, messages, snapshot, reportStep, ct);
+			await ProbeMeshAsync(messages, snapshot, reportStep, ct);
+		}
 
 		_logger.LogInformation(
-			"HaLow probe: Tier A complete for interface {Interface}, scan found {NodeCount} node(s)",
-			ifaceName, scanNodeCount);
+			"HaLow probe: Tier A complete for interface {Interface}, rf_nodes={NodeCount} mesh_running={MeshRunning}",
+			ifaceName, scanNodeCount, meshRunning);
 
-		// ── Tier B — Mesh Connectivity (FR-008, FR-010, FR-011) ─────────
-		await ProbeMeshAsync(messages, snapshot, reportStep, ct);
-
-		// Ready only when the scan found >= 1 node. If the driver and morse
-		// interface are present but no nodes were found, report Degraded so
-		// the test does not pass on driver presence alone.
-		var status = scanNodeCount >= 1 ? PeripheralStatus.Ready : PeripheralStatus.Degraded;
+		var meshAssociated = snapshot.TryGetValue("mesh_associated", out var assocObj) && assocObj is true;
+		var status = scanNodeCount >= 1 || meshAssociated ? PeripheralStatus.Ready : PeripheralStatus.Degraded;
 		return BuildEnvelope(status, true, messages, snapshot);
 	}
 
@@ -421,6 +440,36 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 	}
 
 	/// <summary>
+	/// Passive RF check: count established 802.11s mesh peers without active scan.
+	/// Safe to run while zscout-mesh manages the interface.
+	/// </summary>
+	private async Task<int> ProbePassiveRfAsync(
+		string ifaceName,
+		List<string> messages,
+		Dictionary<string, object?> snapshot,
+		Func<string, string, bool, Task>? reportStep,
+		CancellationToken ct)
+	{
+		var stationResult = await ProcessHelper.RunAsync("iw", $"dev {ifaceName} station dump", 5_000, ct);
+		if (reportStep is not null)
+			await reportStep(
+				$"iw dev {ifaceName} station dump",
+				stationResult.Stdout + stationResult.Stderr,
+				stationResult.ExitCode != 0);
+
+		var peerCount = ParseStationDumpPeerCount(stationResult.Stdout);
+		snapshot["scan_node_count"] = peerCount;
+		snapshot["scan_nodes"] = new List<Dictionary<string, object?>>();
+
+		if (peerCount >= 1)
+			messages.Add($"Layer 4 PASS: passive mesh peer count={peerCount} on {ifaceName}");
+		else
+			messages.Add($"Layer 4: passive mesh peer count=0 on {ifaceName} (BATMAN may still be converging)");
+
+		return peerCount;
+	}
+
+	/// <summary>
 	/// Tier B: Attempt HTTP REST connection to zSCOUT-mesh service for mesh health data.
 	/// If mesh service is unavailable, reports NotTested without failure (FR-011).
 	/// </summary>
@@ -428,27 +477,42 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		List<string> messages,
 		Dictionary<string, object?> snapshot,
 		Func<string, string, bool, Task>? reportStep,
-		CancellationToken ct)
+		CancellationToken ct,
+		bool retryWhenNoPeers = false)
 	{
 		var host = _config["Peripherals:Halow:MeshHost"] ?? "localhost";
 		var port = int.TryParse(_config["Peripherals:Halow:MeshPort"], out var p) ? p : 5102;
 		var timeoutMs = int.TryParse(_config["Peripherals:Halow:MeshTimeoutMs"], out var t) ? t : 5_000;
-
-		// Check mesh service via REST status endpoint
-		var client = _httpClientFactory.CreateClient("MeshSvc");
-		client.BaseAddress = new Uri($"http://{host}:{port}");
-		client.Timeout = TimeSpan.FromMilliseconds(timeoutMs);
+		var retryDelayMs = int.TryParse(_config["Peripherals:Halow:MeshPeerRetryDelayMs"], out var rd) ? rd : 2_000;
+		var maxAttempts = retryWhenNoPeers
+			? (int.TryParse(_config["Peripherals:Halow:MeshPeerRetryAttempts"], out var ra) ? ra : 3)
+			: 1;
 
 		try
 		{
-			using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-			statusCts.CancelAfter(timeoutMs);
-			using var response = await client.GetAsync("/api/status", statusCts.Token);
+			MeshStatusFields? meshFields = null;
+			for (var attempt = 1; attempt <= maxAttempts; attempt++)
+			{
+				meshFields = await FetchMeshStatusAsync(host, port, timeoutMs, ct);
+				if (meshFields is null)
+					break;
 
-			if (!response.IsSuccessStatusCode)
+				if (!retryWhenNoPeers || meshFields.Value.Associated || meshFields.Value.PeerCount >= 1)
+					break;
+
+				if (attempt < maxAttempts)
+				{
+					_logger.LogInformation(
+						"HaLow Tier B: peers=0 on attempt {Attempt}/{MaxAttempts}, retrying in {DelayMs}ms",
+						attempt, maxAttempts, retryDelayMs);
+					await Task.Delay(retryDelayMs, ct);
+				}
+			}
+
+			if (meshFields is null)
 			{
 				if (reportStep is not null)
-					await reportStep($"GET http://{host}:{port}/api/status", $"HTTP {(int)response.StatusCode}", true);
+					await reportStep($"GET http://{host}:{port}/api/status", "HTTP error or unreachable", true);
 
 				snapshot["mesh_service_available"] = false;
 				snapshot["mesh_associated"] = null;
@@ -456,42 +520,32 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 				snapshot["gateway_mode"] = null;
 				snapshot["bat0_ip"] = null;
 				snapshot["internet_reachable"] = null;
-				messages.Add($"Tier B: mesh service returned HTTP {(int)response.StatusCode} on {host}:{port} — mesh tests skipped");
+				messages.Add($"Tier B: mesh service unavailable on {host}:{port} — mesh tests skipped");
 				return;
 			}
 
 			snapshot["mesh_service_available"] = true;
 
-			using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(statusCts.Token), cancellationToken: statusCts.Token);
-			var root = doc.RootElement;
-
-			var meshFields = ParseMeshStatusFields(root);
-			var associated = meshFields.Associated;
-			var peerCount = meshFields.PeerCount;
-			var gatewayMode = meshFields.GatewayMode;
-			var bat0Ip = meshFields.Bat0Ip;
-			var internetReachable = meshFields.InternetReachable;
-			var meshStatusMessage = meshFields.StatusMessage;
-
+			var fields = meshFields.Value;
 			if (reportStep is not null)
 				await reportStep("GET /api/status",
-					$"associated={associated} peers={peerCount} gw={gatewayMode} inet={internetReachable}",
-					!associated);
+					$"associated={fields.Associated} peers={fields.PeerCount} gw={fields.GatewayMode} inet={fields.InternetReachable}",
+					!fields.Associated);
 
-			snapshot["mesh_associated"] = associated;
-			snapshot["peer_count"] = peerCount;
-			snapshot["gateway_mode"] = gatewayMode;
-			snapshot["bat0_ip"] = bat0Ip;
-			snapshot["internet_reachable"] = internetReachable;
+			snapshot["mesh_associated"] = fields.Associated;
+			snapshot["peer_count"] = fields.PeerCount;
+			snapshot["gateway_mode"] = fields.GatewayMode;
+			snapshot["bat0_ip"] = fields.Bat0Ip;
+			snapshot["internet_reachable"] = fields.InternetReachable;
 
-			var tierBPass = associated && peerCount >= 1 && internetReachable;
+			var tierBPass = fields.Associated && fields.PeerCount >= 1 && fields.InternetReachable;
 			var tierBSummary = tierBPass
-				? $"Tier B PASS: mesh associated, {peerCount} peers, gw={gatewayMode}, bat0={bat0Ip}, internet reachable"
-				: associated
-					? $"Tier B: mesh associated but internet probe failed — {meshStatusMessage}"
-					: $"Tier B: mesh not associated — {meshStatusMessage}";
+				? $"Tier B PASS: mesh associated, {fields.PeerCount} peers, gw={fields.GatewayMode}, bat0={fields.Bat0Ip}, internet reachable"
+				: fields.Associated
+					? $"Tier B: mesh associated but internet probe failed — {fields.StatusMessage}"
+					: $"Tier B: mesh not associated — {fields.StatusMessage}";
 			messages.Add(tierBSummary);
-			_logger.LogInformation("HaLow Tier B: associated={Associated} peers={PeerCount}", associated, peerCount);
+			_logger.LogInformation("HaLow Tier B: associated={Associated} peers={PeerCount}", fields.Associated, fields.PeerCount);
 		}
 		catch (Exception ex) when (ex is not OperationCanceledException)
 		{
@@ -508,6 +562,29 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 			messages.Add($"Tier B: mesh service not available on {host}:{port} — mesh tests skipped (NotTested)");
 			_logger.LogInformation("HaLow probe: mesh service not available on {Host}:{Port} — Tier B skipped", host, port);
 		}
+	}
+
+	private async Task<bool> IsMeshServiceReachableAsync(string host, int port, int timeoutMs, CancellationToken ct)
+	{
+		return await FetchMeshStatusAsync(host, port, timeoutMs, ct) is not null;
+	}
+
+	private async Task<MeshStatusFields?> FetchMeshStatusAsync(string host, int port, int timeoutMs, CancellationToken ct)
+	{
+		var client = _httpClientFactory.CreateClient("MeshSvc");
+		client.BaseAddress = new Uri($"http://{host}:{port}");
+		client.Timeout = TimeSpan.FromMilliseconds(timeoutMs);
+
+		using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+		statusCts.CancelAfter(timeoutMs);
+		using var response = await client.GetAsync("/api/status", statusCts.Token);
+		if (!response.IsSuccessStatusCode)
+			return null;
+
+		using var doc = await JsonDocument.ParseAsync(
+			await response.Content.ReadAsStreamAsync(statusCts.Token),
+			cancellationToken: statusCts.Token);
+		return ParseMeshStatusFields(doc.RootElement);
 	}
 
 	// ── Helpers ──────────────────────────────────────────────────────────
@@ -756,6 +833,10 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 				if (current.Ssid.Length == 0)
 					current.Ssid = null;
 			}
+			else if (line.StartsWith("MESH ID:", StringComparison.OrdinalIgnoreCase))
+			{
+				current.Ssid = line["MESH ID:".Length..].Trim();
+			}
 			else if (line.StartsWith("freq:", StringComparison.OrdinalIgnoreCase))
 			{
 				current.Frequency = line["freq:".Length..].Trim();
@@ -767,6 +848,24 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		}
 
 		return nodes;
+	}
+
+	/// <summary>
+	/// Counts established mesh peers from <c>iw dev &lt;iface&gt; station dump</c> output.
+	/// </summary>
+	internal static int ParseStationDumpPeerCount(string stationDumpOutput)
+	{
+		if (string.IsNullOrWhiteSpace(stationDumpOutput))
+			return 0;
+
+		var count = 0;
+		foreach (var raw in stationDumpOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+		{
+			if (StationLineRegex().IsMatch(raw.Trim()))
+				count++;
+		}
+
+		return count;
 	}
 
 	/// <summary>A single AP/STA node discovered by an <c>iw scan</c>.</summary>
@@ -812,4 +911,7 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 
 	[GeneratedRegex(@"^BSS\s+([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})", RegexOptions.IgnoreCase)]
 	private static partial Regex BssRegex();
+
+	[GeneratedRegex(@"^Station\s+([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})\b", RegexOptions.IgnoreCase)]
+	private static partial Regex StationLineRegex();
 }

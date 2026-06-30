@@ -386,4 +386,38 @@ public sealed class HalowAdapterTests
 		Assert.Null(node.Ssid);
 		Assert.Equal("aa:bb:cc:dd:ee:03", node.Bssid);
 	}
+
+	[Fact]
+	public void ParseScanResults_WithMeshId_UsesMeshIdAsSsid()
+	{
+		const string scanOutput = """
+			BSS 0c:bf:74:00:22:20(on wlan1)
+				freq: 5560.0
+				signal: -20.00 dBm
+				MESH ID: zSCOUT-Mesh
+			""";
+
+		var node = Assert.Single(HalowAdapter.ParseScanResults(scanOutput));
+		Assert.Equal("zSCOUT-Mesh", node.Ssid);
+	}
+
+	[Fact]
+	public void ParseStationDumpPeerCount_CountsMeshPeers()
+	{
+		const string dump = """
+			Station 0c:bf:74:00:22:20 (on wlan1)
+				inactive time:	0 ms
+				rx bytes:	1234
+			Station 0c:bf:74:00:33:44 (on wlan1)
+				inactive time:	10 ms
+			""";
+
+		Assert.Equal(2, HalowAdapter.ParseStationDumpPeerCount(dump));
+	}
+
+	[Fact]
+	public void ParseStationDumpPeerCount_WithEmptyOutput_ReturnsZero()
+	{
+		Assert.Equal(0, HalowAdapter.ParseStationDumpPeerCount(""));
+	}
 }
