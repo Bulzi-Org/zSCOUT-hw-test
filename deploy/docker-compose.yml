@@ -50,7 +50,7 @@ services:
       - .env
     healthcheck:
       # bat0 + ready file: mesh radio is up before MeshSvc REST (:5102) is available.
-      test: [ "CMD", "sh", "-c", "test -f /tmp/zscout-mesh-ready && ip link show bat0 | grep -q 'state UP'" ]
+      test: [ "CMD", "sh", "-c", "test -f /tmp/zscout-mesh-ready && ip link show bat0 | grep -q 'LOWER_UP'" ]
       interval: 15s
       timeout: 5s
       retries: 5
