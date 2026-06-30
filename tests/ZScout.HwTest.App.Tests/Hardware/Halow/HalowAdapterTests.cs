@@ -420,4 +420,48 @@ public sealed class HalowAdapterTests
 	{
 		Assert.Equal(0, HalowAdapter.ParseStationDumpPeerCount(""));
 	}
+
+	[Fact]
+	public void IsTierBFullSuccess_WhenAllCriteriaMet_ReturnsTrue()
+	{
+		var snapshot = new Dictionary<string, object?>
+		{
+			["mesh_associated"] = true,
+			["peer_count"] = 1,
+			["internet_reachable"] = true,
+		};
+
+		Assert.True(HalowAdapter.IsTierBFullSuccess(snapshot));
+	}
+
+	[Fact]
+	public void IsTierBFullSuccess_WhenInternetUnreachable_ReturnsFalse()
+	{
+		var snapshot = new Dictionary<string, object?>
+		{
+			["mesh_associated"] = true,
+			["peer_count"] = 1,
+			["internet_reachable"] = false,
+		};
+
+		Assert.False(HalowAdapter.IsTierBFullSuccess(snapshot));
+	}
+
+	[Fact]
+	public void FormatMeshStatusLine_IncludesProbeErrorWhenPresent()
+	{
+		var line = HalowAdapter.FormatMeshStatusLine(new HalowAdapter.MeshStatusFields(
+			Associated: true,
+			PeerCount: 1,
+			GatewayMode: "client",
+			Bat0Ip: "10.41.0.2",
+			InternetReachable: false,
+			StatusMessage: "mesh active",
+			InternetProbeUrl: "https://1.1.1.1",
+			InternetProbeError: "timeout"));
+
+		Assert.Contains("inet=False", line);
+		Assert.Contains("url=https://1.1.1.1", line);
+		Assert.Contains("probe=timeout", line);
+	}
 }

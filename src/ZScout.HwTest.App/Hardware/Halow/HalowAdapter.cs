@@ -94,43 +94,29 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		// ── Layer 3 — Radio health check ──────────────────────────────────
 		await ProbeRadioHealthAsync(ifaceName, messages, snapshot, reportStep, ct);
 
-		// ── Layer 4 / Tier B — RF visibility vs mesh association ───────────
-		// When zscout-mesh owns wlan1, an active `iw scan` disrupts 802.11s mesh
-		// peering and BATMAN-adv neighbors. Probe Tier B first and skip scan.
+		messages.Add("Tier A PASS: hardware checks complete");
+
+		// ── Tier B — continuous mesh + internet probe until full success or stop ──
+		// When zscout-mesh owns wlan1, skip active `iw scan` (disrupts BATMAN-adv).
 		var meshHost = _config["Peripherals:Halow:MeshHost"] ?? "localhost";
 		var meshPort = int.TryParse(_config["Peripherals:Halow:MeshPort"], out var meshPortCfg) ? meshPortCfg : 5102;
 		var meshQuickTimeoutMs = int.TryParse(_config["Peripherals:Halow:MeshQuickTimeoutMs"], out var qtm) ? qtm : 2_000;
 		var meshRunning = await IsMeshServiceReachableAsync(meshHost, meshPort, meshQuickTimeoutMs, ct);
 
-		int scanNodeCount;
-		if (meshRunning)
+		if (!meshRunning)
 		{
-			messages.Add("Layer 4: zscout-mesh active — skipping active iw scan to avoid disrupting BATMAN-adv");
-			await ProbeMeshAsync(messages, snapshot, reportStep, ct, retryWhenNoPeers: true);
-			scanNodeCount = await ProbePassiveRfAsync(ifaceName, messages, snapshot, reportStep, ct);
-
-			if (scanNodeCount < 1
-				&& snapshot.TryGetValue("peer_count", out var peerObj)
-				&& peerObj is int peerCount
-				&& peerCount >= 1)
-			{
-				scanNodeCount = peerCount;
-				snapshot["scan_node_count"] = scanNodeCount;
-			}
+			var scanNodeCount = await ProbeScanAsync(ifaceName, messages, snapshot, reportStep, ct);
+			_logger.LogInformation(
+				"HaLow probe: mesh service unavailable; Tier A scan found {NodeCount} node(s)",
+				scanNodeCount);
+			messages.Add("Tier B: mesh service unavailable — polling until zSCOUT-mesh is reachable");
 		}
 		else
 		{
-			scanNodeCount = await ProbeScanAsync(ifaceName, messages, snapshot, reportStep, ct);
-			await ProbeMeshAsync(messages, snapshot, reportStep, ct);
+			messages.Add("Layer 4: zscout-mesh active — skipping active iw scan to avoid disrupting BATMAN-adv");
 		}
 
-		_logger.LogInformation(
-			"HaLow probe: Tier A complete for interface {Interface}, rf_nodes={NodeCount} mesh_running={MeshRunning}",
-			ifaceName, scanNodeCount, meshRunning);
-
-		var meshAssociated = snapshot.TryGetValue("mesh_associated", out var assocObj) && assocObj is true;
-		var status = scanNodeCount >= 1 || meshAssociated ? PeripheralStatus.Ready : PeripheralStatus.Degraded;
-		return BuildEnvelope(status, true, messages, snapshot);
+		return await RunTierBLoopAsync(ifaceName, meshHost, meshPort, meshRunning, messages, snapshot, reportStep, ct);
 	}
 
 	/// <inheritdoc />
@@ -225,11 +211,18 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 			return (false, false, null);
 		}
 
-		// Parse dmesg for firmware load status
+		// Parse dmesg for firmware load status (optional — often permission-denied in container)
 		var dmesgResult = await ProcessHelper.RunAsync(
 			"dmesg", "", 5_000, ct);
+		var dmesgDenied = dmesgResult.ExitCode != 0
+			&& dmesgResult.Stderr.Contains("Operation not permitted", StringComparison.OrdinalIgnoreCase);
 		if (reportStep is not null)
-			await reportStep("dmesg", dmesgResult.Stdout + dmesgResult.Stderr, dmesgResult.ExitCode != 0);
+		{
+			var dmesgReport = dmesgDenied
+				? "skipped — kernel log requires elevated privileges; morse module loaded confirms driver OK"
+				: dmesgResult.Stdout + dmesgResult.Stderr;
+			await reportStep("dmesg", dmesgReport, false);
+		}
 
 		var dmesgOutput = dmesgResult.ExitCode == 0 ? dmesgResult.Stdout : "";
 		var morseLines = dmesgOutput
@@ -266,6 +259,8 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 
 		if (firmwareVersion is not null)
 			messages.Add($"Layer 1: firmware version {firmwareVersion}");
+		else if (dmesgDenied)
+			messages.Add("Layer 1: dmesg unavailable in container — firmware assumed loaded with module");
 		else
 			messages.Add("Layer 1: firmware version not found in dmesg");
 
@@ -448,18 +443,22 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		List<string> messages,
 		Dictionary<string, object?> snapshot,
 		Func<string, string, bool, Task>? reportStep,
-		CancellationToken ct)
+		CancellationToken ct,
+		bool logMessages = true)
 	{
 		var stationResult = await ProcessHelper.RunAsync("iw", $"dev {ifaceName} station dump", 5_000, ct);
 		if (reportStep is not null)
 			await reportStep(
 				$"iw dev {ifaceName} station dump",
 				stationResult.Stdout + stationResult.Stderr,
-				stationResult.ExitCode != 0);
+				stationResult.ExitCode != 0 && logMessages);
 
 		var peerCount = ParseStationDumpPeerCount(stationResult.Stdout);
 		snapshot["scan_node_count"] = peerCount;
 		snapshot["scan_nodes"] = new List<Dictionary<string, object?>>();
+
+		if (!logMessages)
+			return peerCount;
 
 		if (peerCount >= 1)
 			messages.Add($"Layer 4 PASS: passive mesh peer count={peerCount} on {ifaceName}");
@@ -470,7 +469,93 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 	}
 
 	/// <summary>
-	/// Tier B: Attempt HTTP REST connection to zSCOUT-mesh service for mesh health data.
+	/// Tier B loop: poll mesh status and passive RF peers until full success or cancellation.
+	/// Retries internet probe failures without marking command output as errors.
+	/// </summary>
+	private async Task<DiagnosticEnvelope> RunTierBLoopAsync(
+		string ifaceName,
+		string meshHost,
+		int meshPort,
+		bool meshInitiallyRunning,
+		List<string> messages,
+		Dictionary<string, object?> snapshot,
+		Func<string, string, bool, Task>? reportStep,
+		CancellationToken ct)
+	{
+		var timeoutMs = int.TryParse(_config["Peripherals:Halow:MeshTimeoutMs"], out var t) ? t : 5_000;
+		var pollIntervalMs = int.TryParse(_config["Peripherals:Halow:TierBPollIntervalMs"], out var pi) && pi >= 1_000
+			? pi
+			: 5_000;
+		var meshRunning = meshInitiallyRunning;
+		var pollCount = 0;
+		var passiveRfDone = false;
+
+		while (!ct.IsCancellationRequested)
+		{
+			pollCount++;
+			snapshot["poll_count"] = pollCount;
+
+			if (!meshRunning)
+				meshRunning = await IsMeshServiceReachableAsync(meshHost, meshPort, timeoutMs, ct);
+
+			if (!meshRunning)
+			{
+				if (reportStep is not null)
+					await reportStep($"GET http://{meshHost}:{meshPort}/api/status",
+						"waiting for zSCOUT-mesh…", false);
+				await Task.Delay(pollIntervalMs, ct);
+				continue;
+			}
+
+			snapshot["mesh_service_available"] = true;
+			var fields = await FetchMeshStatusAsync(meshHost, meshPort, timeoutMs, ct);
+			if (fields is null)
+			{
+				meshRunning = false;
+				if (reportStep is not null)
+					await reportStep($"GET http://{meshHost}:{meshPort}/api/status",
+						"HTTP error or unreachable — retrying", false);
+				await Task.Delay(pollIntervalMs, ct);
+				continue;
+			}
+
+			ApplyMeshFieldsToSnapshot(snapshot, fields.Value);
+			var statusLine = FormatMeshStatusLine(fields.Value);
+			if (reportStep is not null)
+				await reportStep("GET /api/status", statusLine, false);
+
+			if (!passiveRfDone)
+			{
+				var peerCount = await ProbePassiveRfAsync(ifaceName, messages, snapshot, reportStep, ct, logMessages: true);
+				passiveRfDone = true;
+				if (peerCount < 1 && fields.Value.PeerCount >= 1)
+					snapshot["scan_node_count"] = fields.Value.PeerCount;
+			}
+			else if (fields.Value.PeerCount >= 1)
+			{
+				snapshot["scan_node_count"] = fields.Value.PeerCount;
+			}
+
+			if (IsTierBFullSuccess(snapshot))
+			{
+				snapshot["tier_b_pass"] = true;
+				messages.Add(
+					$"Tier B PASS: mesh associated, {fields.Value.PeerCount} peers, " +
+					$"gw={fields.Value.GatewayMode}, bat0={fields.Value.Bat0Ip}, internet reachable");
+				_logger.LogInformation(
+					"HaLow Tier B: full success after {PollCount} poll(s) on {Interface}",
+					pollCount, ifaceName);
+				return BuildEnvelope(PeripheralStatus.Ready, true, messages, snapshot);
+			}
+
+			await Task.Delay(pollIntervalMs, ct);
+		}
+
+		return BuildEnvelope(PeripheralStatus.Degraded, true, messages, snapshot);
+	}
+
+	/// <summary>
+	/// Tier B: single-shot mesh status fetch (used by reachability checks).
 	/// If mesh service is unavailable, reports NotTested without failure (FR-011).
 	/// </summary>
 	private async Task ProbeMeshAsync(
@@ -528,9 +613,7 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 
 			var fields = meshFields.Value;
 			if (reportStep is not null)
-				await reportStep("GET /api/status",
-					$"associated={fields.Associated} peers={fields.PeerCount} gw={fields.GatewayMode} inet={fields.InternetReachable}",
-					!fields.Associated);
+				await reportStep("GET /api/status", FormatMeshStatusLine(fields), false);
 
 			snapshot["mesh_associated"] = fields.Associated;
 			snapshot["peer_count"] = fields.PeerCount;
@@ -589,6 +672,32 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 
 	// ── Helpers ──────────────────────────────────────────────────────────
 
+	internal static bool IsTierBFullSuccess(IReadOnlyDictionary<string, object?> snapshot) =>
+		snapshot.TryGetValue("mesh_associated", out var assoc) && assoc is true
+		&& snapshot.TryGetValue("peer_count", out var peers) && peers is int peerCount && peerCount >= 1
+		&& snapshot.TryGetValue("internet_reachable", out var inet) && inet is true;
+
+	internal static string FormatMeshStatusLine(MeshStatusFields fields)
+	{
+		var probe = string.IsNullOrWhiteSpace(fields.InternetProbeError)
+			? "probe=ok"
+			: $"probe={fields.InternetProbeError}";
+		return $"associated={fields.Associated} peers={fields.PeerCount} gw={fields.GatewayMode} " +
+			$"inet={fields.InternetReachable} url={fields.InternetProbeUrl} {probe}";
+	}
+
+	private static void ApplyMeshFieldsToSnapshot(Dictionary<string, object?> snapshot, MeshStatusFields fields)
+	{
+		snapshot["mesh_service_available"] = true;
+		snapshot["mesh_associated"] = fields.Associated;
+		snapshot["peer_count"] = fields.PeerCount;
+		snapshot["gateway_mode"] = fields.GatewayMode;
+		snapshot["bat0_ip"] = fields.Bat0Ip;
+		snapshot["internet_reachable"] = fields.InternetReachable;
+		snapshot["internet_probe_url"] = fields.InternetProbeUrl;
+		snapshot["internet_probe_error"] = fields.InternetProbeError;
+	}
+
 	internal static MeshStatusFields ParseMeshStatusFields(JsonElement root)
 	{
 		var peerCount = TryGetInt32(root, "peer_count", "peerCount") ?? 0;
@@ -601,7 +710,9 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 			GatewayMode: TryGetString(root, "gateway_mode", "gatewayMode") ?? "",
 			Bat0Ip: TryGetString(root, "bat0_ip", "bat0Ip") ?? "",
 			InternetReachable: TryGetBoolean(root, "internet_reachable", "internetReachable") ?? false,
-			StatusMessage: TryGetString(root, "status_message", "statusMessage") ?? "");
+			StatusMessage: TryGetString(root, "status_message", "statusMessage") ?? "",
+			InternetProbeUrl: TryGetString(root, "internet_probe_url", "internetProbeUrl") ?? "",
+			InternetProbeError: TryGetString(root, "internet_probe_error", "internetProbeError") ?? "");
 	}
 
 	private static bool? TryGetBoolean(JsonElement root, params string[] names)
@@ -643,7 +754,9 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		string GatewayMode,
 		string Bat0Ip,
 		bool InternetReachable,
-		string StatusMessage);
+		string StatusMessage,
+		string InternetProbeUrl,
+		string InternetProbeError);
 
 	/// <summary>
 	/// Builds a <see cref="DiagnosticEnvelope"/> from the collected data.
@@ -900,7 +1013,11 @@ public sealed partial class HalowAdapter : IHardwareAdapter
 		"peer_count",
 		"gateway_mode",
 		"bat0_ip",
-		"internet_reachable"
+		"internet_reachable",
+		"internet_probe_url",
+		"internet_probe_error",
+		"tier_b_pass",
+		"poll_count",
 	];
 
 	[GeneratedRegex(@"firmware version[:\s]+(\S+)", RegexOptions.IgnoreCase)]

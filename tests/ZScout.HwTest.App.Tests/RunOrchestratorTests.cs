@@ -15,6 +15,7 @@ public sealed class RunOrchestratorTests : IDisposable
 	private readonly IConfiguration _config;
 	private readonly RunRepository _runs;
 	private readonly EvidenceRepository _evidence;
+	private readonly VerdictRepository _verdicts;
 	private readonly CommandLogRepository _commandLog;
 	private readonly RunCancellationService _cancellation;
 	private readonly NullLiveEventPublisher _events;
@@ -30,6 +31,7 @@ public sealed class RunOrchestratorTests : IDisposable
 			.Build();
 		_runs = new RunRepository(_config);
 		_evidence = new EvidenceRepository(_config);
+		_verdicts = new VerdictRepository(_config);
 		_commandLog = new CommandLogRepository(_config);
 		_cancellation = new RunCancellationService();
 		_events = new NullLiveEventPublisher();
@@ -43,7 +45,7 @@ public sealed class RunOrchestratorTests : IDisposable
 	}
 
 	private RunOrchestrator CreateOrchestrator(IEnumerable<IHardwareAdapter> adapters) =>
-		new(adapters, _runs, _evidence, _commandLog, _events, _telemetry,
+		new(adapters, _runs, _evidence, _verdicts, _commandLog, _events, _telemetry,
 			_cancellation, NullLogger<RunOrchestrator>.Instance);
 
 	private async Task<TestRun> SeedRunAsync(IReadOnlyList<PeripheralId> selectedTests)
@@ -121,6 +123,22 @@ public sealed class RunOrchestratorTests : IDisposable
 	}
 
 	[Fact]
+	public async Task ExecuteAsync_HalowTierBPass_AutoAssignsPassVerdict()
+	{
+		var adapters = new IHardwareAdapter[] { new HalowAutoPassAdapter() };
+		var orch = CreateOrchestrator(adapters);
+		var run = await SeedRunAsync([PeripheralId.Halow]);
+
+		await orch.ExecuteAsync(run.RunId);
+
+		var verdicts = await _verdicts.GetForRunAsync(run.RunId);
+		var verdict = Assert.Single(verdicts);
+		Assert.Equal(PeripheralId.Halow, verdict.PeripheralId);
+		Assert.Equal(VerdictOutcome.Pass, verdict.Outcome);
+		Assert.Equal("auto", verdict.AssignedByUserId);
+	}
+
+	[Fact]
 	public async Task ExecuteAsync_PersistsCommandLogEntries()
 	{
 		var adapter = new ImmediateAdapter(PeripheralId.Gps);
@@ -156,6 +174,34 @@ public sealed class RunOrchestratorTests : IDisposable
 				CapturedAtUtc = DateTimeOffset.UtcNow
 			};
 		}
+
+		public Task<string?> ReadRawSampleAsync(CancellationToken ct = default) => Task.FromResult<string?>(null);
+	}
+
+	private sealed class HalowAutoPassAdapter : IHardwareAdapter
+	{
+		public PeripheralId PeripheralId => PeripheralId.Halow;
+
+		public Task<DiagnosticEnvelope> ProbeAsync(
+			RunMode mode, Func<string, string, bool, Task>? reportStep = null, CancellationToken ct = default) =>
+			Task.FromResult(new DiagnosticEnvelope
+			{
+				PeripheralId = PeripheralId.Halow,
+				Status = PeripheralStatus.Ready,
+				Snapshot = new HealthSnapshot
+				{
+					Values = new Dictionary<string, object?>
+					{
+						["tier_b_pass"] = true,
+						["mesh_associated"] = true,
+						["peer_count"] = 1,
+						["internet_reachable"] = true,
+					}
+				},
+				Messages = [],
+				DependencyAvailable = true,
+				CapturedAtUtc = DateTimeOffset.UtcNow
+			});
 
 		public Task<string?> ReadRawSampleAsync(CancellationToken ct = default) => Task.FromResult<string?>(null);
 	}
